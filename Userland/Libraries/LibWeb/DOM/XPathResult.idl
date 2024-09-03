@@ -1,0 +1,43 @@
+//#import <DOM/Node.idl>
+
+// https://www.w3.org/TR/DOM-Level-3-XPath/idl-definitions.html
+
+[Exposed=Window]
+interface XPathResult {
+  const unsigned short ANY_TYPE = 0;
+  const unsigned short NUMBER_TYPE = 1;
+  const unsigned short STRING_TYPE = 2;
+  const unsigned short BOOLEAN_TYPE = 3;
+  const unsigned short UNORDERED_NODE_ITERATOR_TYPE = 4;
+  const unsigned short ORDERED_NODE_ITERATOR_TYPE = 5;
+  const unsigned short UNORDERED_NODE_SNAPSHOT_TYPE = 6;
+  const unsigned short ORDERED_NODE_SNAPSHOT_TYPE = 7;
+  const unsigned short ANY_UNORDERED_NODE_TYPE = 8;
+  const unsigned short FIRST_ORDERED_NODE_TYPE = 9;
+
+  readonly attribute unsigned short resultType;
+  readonly attribute double numberValue;
+  readonly attribute DOMString stringValue;
+  readonly attribute boolean booleanValue;
+  readonly attribute Node? singleNodeValue;
+  readonly attribute boolean invalidIteratorState;
+  readonly attribute unsigned long snapshotLength;
+
+  Node? iterateNext();
+  Node? snapshotItem(unsigned long index);
+};
+
+interface mixin XPathNSResolver {
+  [FIXME] DOMString? lookupNamespaceURI(optional DOMString? prefix);
+};
+
+interface mixin XPathExpression {
+  [FIXME] XPathResult evaluate(Node contextNode, optional unsigned short type = 0, optional object? result = null);
+  [FIXME] XPathResult evaluateWithContext(Node contextNode, unsigned long contextPosition, unsigned long contextSize, optional unsigned short type = 0, optional object? result = null);
+};
+
+interface mixin XPathEvaluator {
+    [FIXME] XPathExpression createExpression(DOMString expression, optional XPathNSResolver resolver? = null);
+    [FIXME] XPathNSResolver createNSResolver(Node nodeResolver);
+    XPathResult evaluate(DOMString expression, Node contextNode, optional object? resolver = null, optional unsigned short type = 0, optional object? result = null);
+};

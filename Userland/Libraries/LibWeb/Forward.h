@@ -278,6 +278,7 @@ class StaticRange;
 class Text;
 class TreeWalker;
 class XMLDocument;
+class XPathEvaluator;
 
 enum class QuirksMode;
 

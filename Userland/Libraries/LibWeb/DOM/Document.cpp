@@ -5477,4 +5477,15 @@ RefPtr<Painting::DisplayList> Document::record_display_list(PaintConfig config)
     return display_list;
 }
 
+WebIDL::ExceptionOr<JS::NonnullGCPtr<XPathResult>> Document::evaluate(String const& expression, Node& context_node, Optional<JS::Handle<JS::Object>> resolver, u16 type, Optional<JS::Handle<JS::Object>> const& result) 
+{
+    (void)context_node;
+    (void)resolver;
+    (void)type;
+    (void)result;
+    //return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "document.evaluate() not implemented."sv };
+
+    return DOM::XPathResult::create(realm(), expression);
+}
+
 }

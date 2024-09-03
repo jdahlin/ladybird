@@ -204,6 +204,7 @@ set(SOURCES
     DOM/TreeWalker.cpp
     DOM/Utils.cpp
     DOM/XMLDocument.cpp
+    DOM/XPathResult.cpp
     DOMParsing/XMLSerializer.cpp
     DOMURL/DOMURL.cpp
     DOMURL/URLSearchParams.cpp

@@ -24,6 +24,7 @@
 #include <LibWeb/Cookie/Cookie.h>
 #include <LibWeb/DOM/NonElementParentNode.h>
 #include <LibWeb/DOM/ParentNode.h>
+#include <LibWeb/DOM/XPathResult.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/CrossOrigin/CrossOriginOpenerPolicy.h>
 #include <LibWeb/HTML/DocumentReadyState.h>
@@ -268,6 +269,8 @@ public:
 
     // https://drafts.csswg.org/css-font-loading/#font-source
     JS::NonnullGCPtr<CSS::FontFaceSet> fonts();
+
+    WebIDL::ExceptionOr<JS::NonnullGCPtr<XPathResult>> evaluate(String const& xpath, Node& context_node, Optional<JS::Handle<JS::Object>> resolver, u16 type, Optional<JS::Handle<JS::Object>> const& result);
 
     void clear();
     void capture_events();
