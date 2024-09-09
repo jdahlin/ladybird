@@ -129,6 +129,8 @@
 #include <LibWeb/WebIDL/AbstractOperations.h>
 #include <LibWeb/WebIDL/DOMException.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
+#include "LibWeb-Swift.h"
+
 
 namespace Web::DOM {
 
@@ -5477,15 +5479,18 @@ RefPtr<Painting::DisplayList> Document::record_display_list(PaintConfig config)
     return display_list;
 }
 
-WebIDL::ExceptionOr<JS::NonnullGCPtr<XPathResult>> Document::evaluate(String const& expression, Node& context_node, Optional<JS::Handle<JS::Object>> resolver, u16 type, Optional<JS::Handle<JS::Object>> const& result) 
+WebIDL::ExceptionOr<JS::NonnullGCPtr<XPathResult>> Document::evaluate([[maybe_unused]] String const& expression, Node& context_node, Optional<JS::Handle<JS::Object>> resolver, u16 type, Optional<JS::Handle<JS::Object>> const& result) 
 {
     (void)context_node;
     (void)resolver;
     (void)type;
     (void)result;
-    //return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "document.evaluate() not implemented."sv };
-
-    return DOM::XPathResult::create(realm(), expression);
+    return WebIDL::SimpleException { WebIDL::SimpleExceptionType::TypeError, "document.evaluate() not implemented."sv };
+#if 0
+    String retval = xpath_swift(expression.bytes_as_string_view(), &context_node);
+    dbgln("Swift retval: {}", retval);
+    return DOM::XPathResult::create(realm());
+#endif
 }
 
 }

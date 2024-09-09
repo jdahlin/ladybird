@@ -12,14 +12,13 @@ namespace Web::DOM {
 
 JS_DEFINE_ALLOCATOR(XPathResult);
 
-JS::NonnullGCPtr<XPathResult> XPathResult::create(JS::Realm& realm, String const& expression)
+JS::NonnullGCPtr<XPathResult> XPathResult::create(JS::Realm& realm)
 {
-    return realm.heap().allocate<XPathResult>(realm, realm, expression);
+    return realm.heap().allocate<XPathResult>(realm, realm);
 }
 
-XPathResult::XPathResult(JS::Realm& realm, String const& expression)
+XPathResult::XPathResult(JS::Realm& realm)
     : JS::Object(ConstructWithPrototypeTag::Tag, realm.intrinsics().object_prototype())
-    , m_expression(expression)
 {
 }
 

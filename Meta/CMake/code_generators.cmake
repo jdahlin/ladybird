@@ -37,17 +37,17 @@ function(generate_clang_module_map target_name)
 
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     # FIXME: Make this depend on the public headers of the target
-    add_custom_command(
-        OUTPUT "${module_map_file}"
-        COMMAND "${Python3_EXECUTABLE}" "${SerenityOS_SOURCE_DIR}/Meta/generate_clang_module_map.py"
-                "${MODULE_MAP_DIRECTORY}"
-                --module-name "${module_name}"
-                --module-map "${module_map_file}"
-                --vfs-map ${vfs_overlay_file}
-                ${MODULE_MAP_GENERATED_FILES}
-        VERBATIM
-        DEPENDS "${SerenityOS_SOURCE_DIR}/Meta/generate_clang_module_map.py"
-    )
+    # add_custom_command(
+    #     OUTPUT "${module_map_file}"
+    #     COMMAND "${Python3_EXECUTABLE}" "${SerenityOS_SOURCE_DIR}/Meta/generate_clang_module_map.py"
+    #             "${MODULE_MAP_DIRECTORY}"
+    #             --module-name "${module_name}"
+    #             --module-map "${module_map_file}"
+    #             --vfs-map ${vfs_overlay_file}
+    #             ${MODULE_MAP_GENERATED_FILES}
+    #     VERBATIM
+    #     DEPENDS "${SerenityOS_SOURCE_DIR}/Meta/generate_clang_module_map.py"
+    # )
 
     add_custom_target("generate_${target_name}_module_map" DEPENDS "${module_map_file}")
     add_dependencies(all_generated "generate_${target_name}_module_map")

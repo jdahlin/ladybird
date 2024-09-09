@@ -36,7 +36,9 @@ public:                                            \
     }                                              \
     friend class JS::Heap;
 
-class Cell : public Weakable<Cell> {
+using WeakableCell = Weakable<Cell>;
+
+class Cell : public WeakableCell {
     AK_MAKE_NONCOPYABLE(Cell);
     AK_MAKE_NONMOVABLE(Cell);
 

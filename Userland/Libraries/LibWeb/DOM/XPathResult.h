@@ -20,7 +20,7 @@ class XPathResult final : public JS::Object {
 public:
     virtual ~XPathResult() override = default;
 
-    [[nodiscard]] static JS::NonnullGCPtr<XPathResult> create(JS::Realm&, String const& expression);
+    [[nodiscard]] static JS::NonnullGCPtr<XPathResult> create(JS::Realm&);
     XPathResult(JS::Realm&);
 
     unsigned short result_type() const { return m_result_type; }

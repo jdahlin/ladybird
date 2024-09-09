@@ -283,5 +283,16 @@ if("${CMAKE_SYSTEM_PROCESSOR}" MATCHES "i.86.*")
     target_link_libraries(LibJS PRIVATE atomic)
 endif()
 
-target_compile_options(LibJS PRIVATE -fno-omit-frame-pointer)
+#target_compile_options(LibJS PRIVATE -fno-omit-frame-pointer)
 target_link_libraries(LibJS PUBLIC JSClangPlugin)
+
+if (ENABLE_SWIFT)
+    generate_clang_module_map(LibJS GENERATED_FILES
+        "./Parser.h"
+    )
+    target_sources(LibJS PRIVATE
+        LibJS.swift
+    )
+    target_link_libraries(LibJS PRIVATE AK)
+    add_swift_target_properties(LibJS LAGOM_LIBRARIES AK)
+endif()
