@@ -38,7 +38,7 @@
 //! - **Functions**: `emit_new_function`, `emit_function_declaration_instantiation`
 //! - **Helpers**: constant folding, NaN-boxing, error message utilities
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use num_bigint::BigInt;
 use num_traits::{One, Signed, ToPrimitive, Zero};
@@ -8076,7 +8076,7 @@ pub fn emit_function_declaration_instantiation(
 
     // Build parameter_names map and check for duplicates.
     let mut parameter_names: Vec<FdiParameterName> = Vec::new();
-    let mut seen_names: HashSet<Utf16String> = HashSet::new();
+    let mut seen_names: HashSet<Utf16String> = Default::default();
     let mut has_duplicates = false;
 
     for parameter in &function_data.parameters {

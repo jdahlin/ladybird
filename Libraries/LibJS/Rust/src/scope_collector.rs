@@ -50,7 +50,7 @@
 //!   name within one scope (multiple `foo` refs are grouped together)
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::rc::Rc;
 
 use crate::ast::{
@@ -225,8 +225,8 @@ impl ScopeRecord {
             scope_type,
             scope_level,
             scope_data,
-            variables: HashMap::new(),
-            identifier_groups: HashMap::new(),
+            variables: Default::default(),
+            identifier_groups: Default::default(),
             functions_to_hoist: Vec::new(),
             has_function_parameters: false,
             parameter_names: Vec::new(),
@@ -1265,7 +1265,7 @@ impl ScopeCollector {
         // Build functions_to_initialize by scanning children for FunctionDeclarations.
         // Walk in reverse order, deduplicating by name.
         let mut functions_to_initialize: Vec<crate::ast::FunctionToInit> = Vec::new();
-        let mut seen_function_names: HashSet<Utf16String> = HashSet::new();
+        let mut seen_function_names: HashSet<Utf16String> = Default::default();
         {
             let sd = scope_data.borrow();
             for i in (0..sd.children.len()).rev() {

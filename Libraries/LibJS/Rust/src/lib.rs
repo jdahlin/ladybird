@@ -94,7 +94,7 @@ pub(crate) fn u32_from_usize(value: usize) -> u32 {
 use ast::StatementKind;
 use parser::{ParseError, Parser, ProgramType};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -1899,7 +1899,7 @@ fn extract_gdi_common(
     }
 
     // Functions to initialize (reverse order, deduplicated by name).
-    let mut seen_names: HashSet<ast::Utf16String> = HashSet::new();
+    let mut seen_names: HashSet<ast::Utf16String> = Default::default();
     let mut functions_to_init: Vec<(ast::FunctionId, ast::Utf16String)> = Vec::new();
     for child in scope.children.iter().rev() {
         if let StatementKind::FunctionDeclaration {
@@ -2417,7 +2417,7 @@ fn compute_sfd_metadata(function_data: &ast::FunctionData) -> SfdMetadata {
     });
 
     // §10.2.11 steps 5-8: count non-local unique parameter names.
-    let mut parameter_names: HashSet<ast::Utf16String> = HashSet::new();
+    let mut parameter_names: HashSet<ast::Utf16String> = Default::default();
     let mut parameters_in_environment: usize = 0;
     for parameter in &function_data.parameters {
         match &parameter.binding {

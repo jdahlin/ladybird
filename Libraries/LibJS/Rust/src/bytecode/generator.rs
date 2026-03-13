@@ -10,7 +10,7 @@
 //! needed for bytecode generation from the AST.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::rc::Rc;
 
 use super::basic_block::{BasicBlock, SourceMapEntry};
@@ -293,14 +293,14 @@ impl Generator {
             null_constant: None,
             undefined_constant: None,
             empty_constant: None,
-            int32_constants: HashMap::new(),
-            string_constants: HashMap::new(),
+            int32_constants: Default::default(),
+            string_constants: Default::default(),
             string_table: Vec::new(),
-            string_table_index: HashMap::new(),
+            string_table_index: Default::default(),
             identifier_table: Vec::new(),
-            identifier_table_index: HashMap::new(),
+            identifier_table_index: Default::default(),
             property_key_table: Vec::new(),
-            property_key_table_index: HashMap::new(),
+            property_key_table_index: Default::default(),
             compiled_regexes: Vec::new(),
             boundaries: Vec::new(),
             continuable_scopes: Vec::new(),
@@ -341,7 +341,7 @@ impl Generator {
             class_blueprints: Vec::new(),
             length_identifier: None,
             current_unwind_handler: None,
-            annexb_function_names: HashSet::new(),
+            annexb_function_names: Default::default(),
             builtin_abstract_operations_enabled: false,
             vm_ptr: std::ptr::null_mut(),
             source_code_ptr: std::ptr::null(),

@@ -7,7 +7,7 @@
 //! Declaration parsing: variables, functions, classes, imports, exports.
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::rc::Rc;
 
 use crate::ast::*;
@@ -181,7 +181,7 @@ impl<'a> Parser<'a> {
                 }
 
                 if kind != DeclarationKind::Var {
-                    let mut seen: HashSet<&[u16]> = HashSet::new();
+                    let mut seen: HashSet<&[u16]> = Default::default();
                     for (name, _) in &bound_names {
                         if !seen.insert(name.as_slice()) {
                             self.syntax_error("Duplicate parameter names in bindings");
@@ -640,9 +640,9 @@ impl<'a> Parser<'a> {
         let mut elements: Vec<Node<ClassElement>> = Vec::new();
         let mut constructor: Option<Expression> = None;
         let mut found_private_names: HashMap<Utf16String, (Option<ClassMethodKind>, bool)> =
-            HashMap::new();
+            Default::default();
 
-        self.referenced_private_names_stack.push(HashSet::new());
+        self.referenced_private_names_stack.push(Default::default());
 
         let saved_class_has_super = self.class_has_super_class;
         self.class_has_super_class = super_class.is_some();
@@ -1256,7 +1256,7 @@ impl<'a> Parser<'a> {
         let mut has_seen_default = false;
         let mut has_seen_rest = false;
         let mut parameter_info: Vec<ParamInfo> = Vec::new();
-        let mut seen_parameter_names: HashSet<Utf16String> = HashSet::new();
+        let mut seen_parameter_names: HashSet<Utf16String> = Default::default();
 
         // C++ uses the position at the start of parse_formal_parameters for all
         // parameter identifiers (i.e., the position of the first parameter).
