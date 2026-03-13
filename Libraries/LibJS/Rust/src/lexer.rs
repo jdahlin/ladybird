@@ -87,6 +87,28 @@ pub(crate) const fn ch(c: u8) -> u16 {
     c as u16
 }
 
+/// Compile-time lookup table: ASCII identifier start characters (a-z, A-Z, _, $).
+static ASCII_ID_START: [bool; 128] = {
+    let mut table = [false; 128];
+    let mut i = 0u8;
+    while i < 128 {
+        table[i as usize] = matches!(i, b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$');
+        i += 1;
+    }
+    table
+};
+
+/// Compile-time lookup table: ASCII identifier continue characters (a-z, A-Z, 0-9, _, $).
+static ASCII_ID_CONTINUE: [bool; 128] = {
+    let mut table = [false; 128];
+    let mut i = 0u8;
+    while i < 128 {
+        table[i as usize] = matches!(i, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$');
+        i += 1;
+    }
+    table
+};
+
 fn is_ascii(cu: u16) -> bool {
     cu < 128
 }
@@ -663,13 +685,61 @@ impl<'a> Lexer<'a> {
     /// Consumes identifier-continue characters and detects unicode escapes.
     /// Returns true if the identifier contains escape sequences.
     fn scan_identifier_body(&mut self, initial_len: usize) -> bool {
+        // ASCII fast path: when the start character was a plain ASCII char
+        // (initial_len == 1), use a tight loop that bypasses consume() overhead.
+        if initial_len == 1 {
+            // Advance past the start character (simple ASCII, no LT/surrogate checks).
+            self.line_column += 1;
+            if self.position < self.source.len() {
+                self.current_code_unit = self.source[self.position];
+                self.position += 1;
+            } else {
+                self.eof = true;
+                self.current_code_unit = 0;
+                self.position = self.source.len() + 1;
+                self.line_column += 1;
+                return false;
+            }
+
+            // Tight ASCII identifier loop.
+            loop {
+                let cu = self.current_code_unit;
+                if cu < 128 && ASCII_ID_CONTINUE[cu as usize] {
+                    self.line_column += 1;
+                    if self.position < self.source.len() {
+                        self.current_code_unit = self.source[self.position];
+                        self.position += 1;
+                    } else {
+                        self.eof = true;
+                        self.current_code_unit = 0;
+                        self.position = self.source.len() + 1;
+                        self.line_column += 1;
+                        return false;
+                    }
+                } else if cu == b'\\' as u16 || cu >= 128 {
+                    // Non-ASCII or escape — check if it continues the identifier.
+                    if let Some((_cp, len)) = self.is_identifier_middle() {
+                        return self.scan_identifier_body_slow(len);
+                    }
+                    break;
+                } else {
+                    break;
+                }
+            }
+            return false;
+        }
+
+        self.scan_identifier_body_slow(initial_len)
+    }
+
+    /// Slow path for identifier scanning: handles unicode escapes, surrogate pairs,
+    /// and non-ASCII identifier characters.
+    fn scan_identifier_body_slow(&mut self, initial_len: usize) -> bool {
         let mut has_escape = false;
         let mut ident_len = initial_len;
         loop {
             let is_pair = self.is_surrogate_pair(ident_len);
             has_escape |= ident_len > 1 && !is_pair;
-            // consume() already advances past both code units of a
-            // surrogate pair, so only call it once in that case.
             let consume_count = if is_pair { 1 } else { ident_len };
             for _ in 0..consume_count {
                 self.consume();
@@ -764,6 +834,32 @@ impl<'a> Lexer<'a> {
         }
 
         None
+    }
+
+    /// Classify an identifier token: check for keywords and escaped keywords.
+    fn classify_identifier(
+        &self,
+        has_escape: bool,
+        value_start: usize,
+        token_type: &mut TokenType,
+        identifier_value: &mut Option<Utf16String>,
+    ) {
+        if has_escape {
+            let decoded = self.build_identifier_value(value_start);
+            if keyword_from_str(&decoded).is_some() {
+                *token_type = TokenType::EscapedKeyword;
+            } else {
+                *token_type = TokenType::Identifier;
+            }
+            *identifier_value = Some(decoded);
+        } else {
+            let source_slice = &self.source[value_start - 1..self.position - 1];
+            if let Some(kw) = keyword_from_str(source_slice) {
+                *token_type = kw;
+            } else {
+                *token_type = TokenType::Identifier;
+            }
+        }
     }
 
     fn match2(&self, a: u16, b: u16) -> bool {
@@ -1105,29 +1201,15 @@ impl<'a> Lexer<'a> {
                     "Start of private name '#' but not followed by valid identifier".to_string(),
                 );
             }
+        } else if self.current_code_unit < 128
+            && ASCII_ID_START[self.current_code_unit as usize]
+        {
+            // ASCII identifier fast path — skip is_identifier_start/current_code_point overhead.
+            let has_escape = self.scan_identifier_body(1);
+            self.classify_identifier(has_escape, value_start, &mut token_type, &mut identifier_value);
         } else if let Some((_cp, len)) = self.is_identifier_start() {
             let has_escape = self.scan_identifier_body(len);
-
-            if has_escape {
-                // https://tc39.es/ecma262/#sec-identifier-names-static-semantics-early-errors
-                // IdentifierName :: IdentifierName IdentifierPart
-                // It is a Syntax Error if the source text matched by this production
-                // is a ReservedWord after processing unicode escape sequences.
-                let decoded = self.build_identifier_value(value_start);
-                if keyword_from_str(&decoded).is_some() {
-                    token_type = TokenType::EscapedKeyword;
-                } else {
-                    token_type = TokenType::Identifier;
-                }
-                identifier_value = Some(decoded);
-            } else {
-                let source_slice = &self.source[value_start - 1..self.position - 1];
-                if let Some(kw) = keyword_from_str(source_slice) {
-                    token_type = kw;
-                } else {
-                    token_type = TokenType::Identifier;
-                }
-            }
+            self.classify_identifier(has_escape, value_start, &mut token_type, &mut identifier_value);
         } else if self.is_numeric_literal_start() {
             token_type = TokenType::NumericLiteral;
             let mut is_invalid = false;
