@@ -385,86 +385,6 @@ fn keyword_from_str(s: &[u16]) -> Option<TokenType> {
     None
 }
 
-fn single_char_token(ch: u16) -> TokenType {
-    assert!(ch < 128);
-    match ch as u8 {
-        b'&' => TokenType::Ampersand,
-        b'*' => TokenType::Asterisk,
-        b'[' => TokenType::BracketOpen,
-        b']' => TokenType::BracketClose,
-        b'^' => TokenType::Caret,
-        b':' => TokenType::Colon,
-        b',' => TokenType::Comma,
-        b'{' => TokenType::CurlyOpen,
-        b'}' => TokenType::CurlyClose,
-        b'=' => TokenType::Equals,
-        b'!' => TokenType::ExclamationMark,
-        b'-' => TokenType::Minus,
-        b'(' => TokenType::ParenOpen,
-        b')' => TokenType::ParenClose,
-        b'%' => TokenType::Percent,
-        b'.' => TokenType::Period,
-        b'|' => TokenType::Pipe,
-        b'+' => TokenType::Plus,
-        b'?' => TokenType::QuestionMark,
-        b';' => TokenType::Semicolon,
-        b'/' => TokenType::Slash,
-        b'~' => TokenType::Tilde,
-        b'<' => TokenType::LessThan,
-        b'>' => TokenType::GreaterThan,
-        _ => TokenType::Invalid,
-    }
-}
-
-fn parse_two_char_token(ch0: u16, ch1: u16) -> TokenType {
-    if ch0 >= 128 || ch1 >= 128 {
-        return TokenType::Invalid;
-    }
-    match (ch0 as u8, ch1 as u8) {
-        (b'=', b'>') => TokenType::Arrow,
-        (b'=', b'=') => TokenType::EqualsEquals,
-        (b'+', b'=') => TokenType::PlusEquals,
-        (b'+', b'+') => TokenType::PlusPlus,
-        (b'-', b'=') => TokenType::MinusEquals,
-        (b'-', b'-') => TokenType::MinusMinus,
-        (b'*', b'=') => TokenType::AsteriskEquals,
-        (b'*', b'*') => TokenType::DoubleAsterisk,
-        (b'/', b'=') => TokenType::SlashEquals,
-        (b'%', b'=') => TokenType::PercentEquals,
-        (b'&', b'=') => TokenType::AmpersandEquals,
-        (b'&', b'&') => TokenType::DoubleAmpersand,
-        (b'|', b'=') => TokenType::PipeEquals,
-        (b'|', b'|') => TokenType::DoublePipe,
-        (b'^', b'=') => TokenType::CaretEquals,
-        (b'<', b'=') => TokenType::LessThanEquals,
-        (b'<', b'<') => TokenType::ShiftLeft,
-        (b'>', b'=') => TokenType::GreaterThanEquals,
-        (b'>', b'>') => TokenType::ShiftRight,
-        (b'?', b'?') => TokenType::DoubleQuestionMark,
-        (b'?', b'.') => TokenType::QuestionMarkPeriod,
-        (b'!', b'=') => TokenType::ExclamationMarkEquals,
-        _ => TokenType::Invalid,
-    }
-}
-
-fn parse_three_char_token(ch0: u16, ch1: u16, ch2: u16) -> TokenType {
-    if ch0 >= 128 || ch1 >= 128 || ch2 >= 128 {
-        return TokenType::Invalid;
-    }
-    match (ch0 as u8, ch1 as u8, ch2 as u8) {
-        (b'<', b'<', b'=') => TokenType::ShiftLeftEquals,
-        (b'>', b'>', b'=') => TokenType::ShiftRightEquals,
-        (b'>', b'>', b'>') => TokenType::UnsignedShiftRight,
-        (b'=', b'=', b'=') => TokenType::EqualsEqualsEquals,
-        (b'!', b'=', b'=') => TokenType::ExclamationMarkEqualsEquals,
-        (b'.', b'.', b'.') => TokenType::TripleDot,
-        (b'*', b'*', b'=') => TokenType::DoubleAsteriskEquals,
-        (b'&', b'&', b'=') => TokenType::DoubleAmpersandEquals,
-        (b'|', b'|', b'=') => TokenType::DoublePipeEquals,
-        (b'?', b'?', b'=') => TokenType::DoubleQuestionMarkEquals,
-        _ => TokenType::Invalid,
-    }
-}
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a [u16], line_number: u32, line_column: u32) -> Self {
@@ -1388,65 +1308,224 @@ impl<'a> Lexer<'a> {
             } else {
                 token_type = TokenType::Eof;
             }
-        } else {
-            let mut found_token = false;
-
-            if self.match4(ch(b'>'), ch(b'>'), ch(b'>'), ch(b'=')) {
-                found_token = true;
-                token_type = TokenType::UnsignedShiftRightEquals;
-                self.consume();
-                self.consume();
-                self.consume();
-                self.consume();
-            }
-
-            if !found_token && self.position + 1 < self.source_len() {
-                let ch0 = self.current_code_unit;
-                let ch1 = self.source[self.position];
-                let ch2 = self.source[self.position + 1];
-                let tt = parse_three_char_token(ch0, ch1, ch2);
-                if tt != TokenType::Invalid {
-                    found_token = true;
-                    token_type = tt;
-                    self.consume();
-                    self.consume();
-                    self.consume();
-                }
-            }
-
-            if !found_token && self.position < self.source_len() {
-                let ch0 = self.current_code_unit;
-                let ch1 = self.source[self.position];
-                let tt = parse_two_char_token(ch0, ch1);
-                if tt != TokenType::Invalid {
-                    // https://tc39.es/ecma262/#sec-punctuators
-                    // OptionalChainingPunctuator :: `?.` [lookahead ∉ DecimalDigit]
-                    // This prevents `a?.3:b` from being parsed as optional chaining.
-                    if !(tt == TokenType::QuestionMarkPeriod
-                        && self.position + 1 < self.source_len()
-                        && is_ascii_digit(self.source[self.position + 1]))
-                    {
-                        found_token = true;
-                        token_type = tt;
-                        self.consume();
+        } else if is_ascii(self.current_code_unit) {
+            // Inline operator dispatch: handle each ASCII operator character directly
+            // instead of cascading through match4/parse_three_char/parse_two_char/single_char.
+            let next = if self.position < self.source.len() { self.source[self.position] } else { 0 };
+            let next2 = if self.position + 1 < self.source.len() { self.source[self.position + 1] } else { 0 };
+            match self.current_code_unit as u8 {
+                b';' => { token_type = TokenType::Semicolon; self.consume(); }
+                b',' => { token_type = TokenType::Comma; self.consume(); }
+                b'(' => { token_type = TokenType::ParenOpen; self.consume(); }
+                b')' => { token_type = TokenType::ParenClose; self.consume(); }
+                b'[' => { token_type = TokenType::BracketOpen; self.consume(); }
+                b']' => { token_type = TokenType::BracketClose; self.consume(); }
+                b'{' => { token_type = TokenType::CurlyOpen; self.consume(); }
+                b'}' => { token_type = TokenType::CurlyClose; self.consume(); }
+                b':' => { token_type = TokenType::Colon; self.consume(); }
+                b'~' => { token_type = TokenType::Tilde; self.consume(); }
+                b'=' => {
+                    if next == b'=' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::EqualsEqualsEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::EqualsEquals;
+                        self.consume(); self.consume();
+                    } else if next == b'>' as u16 {
+                        token_type = TokenType::Arrow;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Equals;
                         self.consume();
                     }
                 }
-            }
-
-            if !found_token && is_ascii(self.current_code_unit) {
-                let tt = single_char_token(self.current_code_unit);
-                if tt != TokenType::Invalid {
-                    found_token = true;
-                    token_type = tt;
+                b'!' => {
+                    if next == b'=' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::ExclamationMarkEqualsEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::ExclamationMarkEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::ExclamationMark;
+                        self.consume();
+                    }
+                }
+                b'+' => {
+                    if next == b'+' as u16 {
+                        token_type = TokenType::PlusPlus;
+                        self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::PlusEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Plus;
+                        self.consume();
+                    }
+                }
+                b'-' => {
+                    if next == b'-' as u16 {
+                        token_type = TokenType::MinusMinus;
+                        self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::MinusEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Minus;
+                        self.consume();
+                    }
+                }
+                b'*' => {
+                    if next == b'*' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::DoubleAsteriskEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'*' as u16 {
+                        token_type = TokenType::DoubleAsterisk;
+                        self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::AsteriskEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Asterisk;
+                        self.consume();
+                    }
+                }
+                b'/' => {
+                    if next == b'=' as u16 {
+                        token_type = TokenType::SlashEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Slash;
+                        self.consume();
+                    }
+                }
+                b'%' => {
+                    if next == b'=' as u16 {
+                        token_type = TokenType::PercentEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Percent;
+                        self.consume();
+                    }
+                }
+                b'&' => {
+                    if next == b'&' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::DoubleAmpersandEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'&' as u16 {
+                        token_type = TokenType::DoubleAmpersand;
+                        self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::AmpersandEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Ampersand;
+                        self.consume();
+                    }
+                }
+                b'|' => {
+                    if next == b'|' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::DoublePipeEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'|' as u16 {
+                        token_type = TokenType::DoublePipe;
+                        self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::PipeEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Pipe;
+                        self.consume();
+                    }
+                }
+                b'^' => {
+                    if next == b'=' as u16 {
+                        token_type = TokenType::CaretEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Caret;
+                        self.consume();
+                    }
+                }
+                b'<' => {
+                    if next == b'<' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::ShiftLeftEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'<' as u16 {
+                        token_type = TokenType::ShiftLeft;
+                        self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::LessThanEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::LessThan;
+                        self.consume();
+                    }
+                }
+                b'>' => {
+                    if next == b'>' as u16 && next2 == b'>' as u16 {
+                        // Check for >>>= (4-char token)
+                        let next3 = if self.position + 2 < self.source.len() { self.source[self.position + 2] } else { 0 };
+                        if next3 == b'=' as u16 {
+                            token_type = TokenType::UnsignedShiftRightEquals;
+                            self.consume(); self.consume(); self.consume(); self.consume();
+                        } else {
+                            token_type = TokenType::UnsignedShiftRight;
+                            self.consume(); self.consume(); self.consume();
+                        }
+                    } else if next == b'>' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::ShiftRightEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'>' as u16 {
+                        token_type = TokenType::ShiftRight;
+                        self.consume(); self.consume();
+                    } else if next == b'=' as u16 {
+                        token_type = TokenType::GreaterThanEquals;
+                        self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::GreaterThan;
+                        self.consume();
+                    }
+                }
+                b'?' => {
+                    if next == b'?' as u16 && next2 == b'=' as u16 {
+                        token_type = TokenType::DoubleQuestionMarkEquals;
+                        self.consume(); self.consume(); self.consume();
+                    } else if next == b'?' as u16 {
+                        token_type = TokenType::DoubleQuestionMark;
+                        self.consume(); self.consume();
+                    } else if next == b'.' as u16 {
+                        // https://tc39.es/ecma262/#sec-punctuators
+                        // OptionalChainingPunctuator :: `?.` [lookahead ∉ DecimalDigit]
+                        if !is_ascii_digit(next2) {
+                            token_type = TokenType::QuestionMarkPeriod;
+                            self.consume(); self.consume();
+                        } else {
+                            token_type = TokenType::QuestionMark;
+                            self.consume();
+                        }
+                    } else {
+                        token_type = TokenType::QuestionMark;
+                        self.consume();
+                    }
+                }
+                b'.' => {
+                    if next == b'.' as u16 && next2 == b'.' as u16 {
+                        token_type = TokenType::TripleDot;
+                        self.consume(); self.consume(); self.consume();
+                    } else {
+                        token_type = TokenType::Period;
+                        self.consume();
+                    }
+                }
+                _ => {
+                    token_type = TokenType::Invalid;
                     self.consume();
                 }
             }
-
-            if !found_token {
-                token_type = TokenType::Invalid;
-                self.consume();
-            }
+        } else {
+            token_type = TokenType::Invalid;
+            self.consume();
         }
 
         if !self.template_states.is_empty() && self.current_template_state().in_expression {
