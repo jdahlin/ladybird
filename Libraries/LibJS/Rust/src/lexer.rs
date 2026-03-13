@@ -1071,19 +1071,53 @@ impl<'a> Lexer<'a> {
                         }
                     }
                 } else if self.is_whitespace() {
-                    loop {
-                        self.consume();
-                        if !self.is_whitespace() {
+                    // ASCII non-LT whitespace fast path (space, tab, VT, FF).
+                    while !self.eof
+                        && self.current_code_unit < 128
+                        && matches!(self.current_code_unit as u8, b' ' | b'\t' | 0x0B | 0x0C)
+                    {
+                        self.line_column += 1;
+                        if self.position < self.source.len() {
+                            self.current_code_unit = self.source[self.position];
+                            self.position += 1;
+                        } else {
+                            self.eof = true;
+                            self.current_code_unit = 0;
+                            self.position = self.source.len() + 1;
+                            self.line_column += 1;
                             break;
                         }
                     }
+                    // Fall back to general loop for remaining non-ASCII whitespace.
+                    while self.is_whitespace() {
+                        self.consume();
+                    }
                 } else if self.is_line_comment_start(line_has_token_yet) {
                     self.consume();
+                    // ASCII line comment fast path: skip non-LT ASCII chars directly.
+                    while !self.eof
+                        && self.current_code_unit < 128
+                        && self.current_code_unit != b'\n' as u16
+                        && self.current_code_unit != b'\r' as u16
+                    {
+                        self.line_column += 1;
+                        if self.position < self.source.len() {
+                            self.current_code_unit = self.source[self.position];
+                            self.position += 1;
+                        } else {
+                            self.eof = true;
+                            self.current_code_unit = 0;
+                            self.position = self.source.len() + 1;
+                            self.line_column += 1;
+                            break;
+                        }
+                    }
+                    // Fall back for non-ASCII (LS/PS line terminators).
                     loop {
-                        self.consume();
                         if self.is_eof() || self.is_line_terminator() {
                             break;
                         }
+                        self.consume();
                     }
                 } else if self.is_block_comment_start() {
                     let start_line_number = self.line_number;
@@ -1280,6 +1314,28 @@ impl<'a> Lexer<'a> {
         } else if self.current_code_unit == ch(b'"') || self.current_code_unit == ch(b'\'') {
             let stop_char = self.current_code_unit;
             self.consume();
+            // ASCII string literal fast path: skip plain ASCII chars that aren't
+            // the stop char, backslash, CR, or LF.
+            while !self.eof
+                && self.current_code_unit < 128
+                && self.current_code_unit != stop_char
+                && self.current_code_unit != b'\\' as u16
+                && self.current_code_unit != b'\r' as u16
+                && self.current_code_unit != b'\n' as u16
+            {
+                self.line_column += 1;
+                if self.position < self.source.len() {
+                    self.current_code_unit = self.source[self.position];
+                    self.position += 1;
+                } else {
+                    self.eof = true;
+                    self.current_code_unit = 0;
+                    self.position = self.source.len() + 1;
+                    self.line_column += 1;
+                    break;
+                }
+            }
+            // Fall back to general loop for escapes, non-ASCII, and terminators.
             while self.current_code_unit != stop_char
                 && self.current_code_unit != ch(b'\r')
                 && self.current_code_unit != ch(b'\n')
@@ -1295,6 +1351,26 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 self.consume();
+                // Re-enter ASCII fast path after escape.
+                while !self.eof
+                    && self.current_code_unit < 128
+                    && self.current_code_unit != stop_char
+                    && self.current_code_unit != b'\\' as u16
+                    && self.current_code_unit != b'\r' as u16
+                    && self.current_code_unit != b'\n' as u16
+                {
+                    self.line_column += 1;
+                    if self.position < self.source.len() {
+                        self.current_code_unit = self.source[self.position];
+                        self.position += 1;
+                    } else {
+                        self.eof = true;
+                        self.current_code_unit = 0;
+                        self.position = self.source.len() + 1;
+                        self.line_column += 1;
+                        break;
+                    }
+                }
             }
             if self.current_code_unit != stop_char {
                 token_type = TokenType::UnterminatedStringLiteral;
