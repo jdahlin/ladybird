@@ -1260,60 +1260,35 @@ impl<'a, const SYNTAX_CHECK: bool> Parser<'a, SYNTAX_CHECK> {
         // bodies.  Spawning another syntax checker would produce mismatched
         // line numbers that break error-position-based clearing.
         if SYNTAX_CHECK {
-            let mut depth: u32 = 1;
-            let mut saw_this = false;
-            let mut has_use_strict = false;
-            let mut body_start_offset = 0u32;
-            let mut is_first_token = true;
-            loop {
-                self.consume();
-                if is_first_token {
-                    is_first_token = false;
-                    body_start_offset = self.current_token.offset;
-                    if self.current_token_type() == TokenType::StringLiteral {
-                        let val = self.token_original_value(&self.current_token);
-                        if crate::parser::is_use_strict(val) {
-                            has_use_strict = true;
-                        }
-                    }
-                }
-                match self.current_token_type() {
-                    TokenType::CurlyOpen => depth += 1,
-                    TokenType::CurlyClose => {
-                        depth -= 1;
-                        if depth == 0 {
-                            self.consume();
-                            break;
-                        }
-                    }
-                    TokenType::This => saw_this = true,
-                    // Collect identifier tokens for free variable tracking.
-                    // These come from brace-counted (doubly-nested) function
-                    // bodies where full scope analysis isn't available.
-                    TokenType::Identifier => {
-                        let value = self.token_value(&self.current_token).to_vec();
-                        // Conservatively treat any use of `eval` as a
-                        // potential direct eval call.  We can't distinguish
-                        // `eval(...)` from `obj.eval` in brace-counting, but
-                        // false positives are harmless (just less optimized).
-                        if value == utf16!("eval") {
-                            self.scope_collector.set_contains_direct_call_to_eval();
-                            self.scope_collector.set_uses_this();
-                        }
-                        self.scope_collector
-                            .use_identifier_in_free_var_tracking(&value);
-                    }
-                    TokenType::Eof => break,
-                    _ => {}
-                }
+            // In syntax-check mode, recursively syntax-check nested function
+            // bodies instead of brace-counting. This ensures syntax errors
+            // are caught at any nesting depth.
+            self.consume(); // consumes `{`
+            let body_start_offset = self.current_token.offset;
+
+            self.scope_collector.open_function_scope(None);
+            if is_async {
+                self.flags.await_expression_is_valid = true;
             }
-            if saw_this {
-                self.scope_collector.set_uses_this();
+            if is_generator {
+                self.flags.in_generator_function_context = true;
             }
+
+            let (has_use_strict, _) = self.parse_directive();
+            if has_use_strict {
+                self.flags.strict_mode = true;
+            }
+            self.parse_statement_list(false);
+            self.consume_token(TokenType::CurlyClose);
+
+            let uses_this = self.scope_collector.uses_this();
+            let has_eval = self.scope_collector.contains_direct_call_to_eval();
+            self.scope_collector.close_scope();
+
             let insights = FunctionParsingInsights {
-                uses_this: self.scope_collector.uses_this(),
+                uses_this,
                 uses_this_from_environment: self.scope_collector.uses_this_from_environment(),
-                contains_direct_call_to_eval: self.scope_collector.contains_direct_call_to_eval(),
+                contains_direct_call_to_eval: has_eval,
                 might_need_arguments_object: self.flags.function_might_need_arguments_object,
             };
             let lazy = LazyFunctionBody {
@@ -1339,11 +1314,16 @@ impl<'a, const SYNTAX_CHECK: bool> Parser<'a, SYNTAX_CHECK> {
             is_async,
             is_generator,
         );
+        // Inherit strict mode from the enclosing scope.
+        checker.flags.strict_mode = self.flags.strict_mode;
         // Open a function scope in the checker so declaration/reference
         // tracking can compute free variables for this lazy function body.
         checker.scope_collector.open_function_scope(None);
 
         let (has_use_strict, _) = checker.parse_directive();
+        if has_use_strict {
+            checker.flags.strict_mode = true;
+        }
         checker.parse_statement_list(false);
         checker.consume_token(TokenType::CurlyClose);
 

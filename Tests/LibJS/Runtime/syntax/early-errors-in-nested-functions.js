@@ -34,4 +34,28 @@ describe("syntax errors in inner functions are early errors", () => {
     test("syntax error in function inside class method", () => {
         expect("class C { m() { function f() { var x = ; } } }").not.toEval();
     });
+
+    test("strict mode 'use strict' inside lazily-parsed function", () => {
+        expect("function outer(){ function inner(){ 'use strict'; with({}){} } }").not.toEval();
+    });
+
+    test("inherited strict mode in lazily-parsed function", () => {
+        expect("'use strict'; function outer(){ function inner(){ with({}){} } }").not.toEval();
+    });
+
+    test("shorthand property captures free variable from outer scope", () => {
+        expect(`
+            function outer(obj) {
+                function inner() { return { source }; }
+                const { source } = obj;
+                return inner();
+            }
+            var r = outer({ source: 42 });
+            if (r.source !== 42) throw new Error("FAIL");
+        `).toEval();
+    });
+
+    test("syntax error at depth 4", () => {
+        expect("function a(){ function b(){ function c(){ function d(){ var x = ; } } } }").not.toEval();
+    });
 });

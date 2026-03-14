@@ -183,30 +183,17 @@ pub struct ParameterEntry {
     pub is_first_from_pattern: bool,
 }
 
-/// Hash a name slice for use as a lightweight set key in FreeVarOnly mode.
-/// Using pre-hashed keys avoids allocating Utf16String for every declaration.
-#[inline]
-fn name_hash(name: &[u16]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = rustc_hash::FxHasher::default();
-    name.hash(&mut h);
-    h.finish()
-}
-
 /// Lightweight per-scope tracking for FreeVarOnly mode.
 /// Tracks which names are declared vs used so `close_scope` can compute
 /// free variables (used − declared) and propagate them upward.
-/// Declarations use hashes only (membership tests are sufficient).
-/// `used` stores hash→name so the final free variable set can produce
-/// the actual Utf16String names.
 #[derive(Debug, Default)]
 struct FreeVarData {
-    declared: HashSet<u64>,
+    declared: HashSet<Utf16String>,
     /// Subset of `declared` containing only `var` bindings.  When the scope
     /// has parameter expressions, `var` body bindings must not mask
     /// identifier references from default-parameter expressions.
-    var_declared: HashSet<u64>,
-    used: HashMap<u64, Utf16String>,
+    var_declared: HashSet<Utf16String>,
+    used: HashSet<Utf16String>,
 }
 
 #[derive(Debug)]
@@ -428,11 +415,10 @@ impl ScopeCollector {
     /// mode only).  Called from SYNTAX_CHECK identifier-reference paths and
     /// from brace-counting of doubly-nested lazy functions.
     pub fn use_identifier_in_free_var_tracking(&mut self, name: &[u16]) {
-        if let Some(index) = self.current {
-            if let Some(ref mut fv) = self.records[index].free_var {
-                let h = name_hash(name);
-                fv.used.entry(h).or_insert_with(|| Utf16String::from(name));
-            }
+        if let Some(index) = self.current
+            && let Some(ref mut fv) = self.records[index].free_var
+        {
+            fv.used.insert(Utf16String::from(name));
         }
     }
 
@@ -514,7 +500,8 @@ impl ScopeCollector {
         scope_level: ScopeLevel,
     ) {
         let index = self.records.len();
-        let mut record = ScopeRecord::new(scope_type, scope_level, scope_data, self.is_free_var_only());
+        let mut record =
+            ScopeRecord::new(scope_type, scope_level, scope_data, self.is_free_var_only());
         record.parent = self.current;
 
         if scope_type != ScopeType::Function
@@ -551,17 +538,17 @@ impl ScopeCollector {
             // Special case: when the scope has parameter expressions, var
             // body bindings don't shadow default-parameter references
             // (they live in separate scopes per the spec).
-            let free_names = fv.used.iter().filter(|(hash, _)| {
-                if !fv.declared.contains(hash) {
+            let free_names = fv.used.iter().filter(|name| {
+                if !fv.declared.contains(*name) {
                     return true;
                 }
-                has_param_exprs && fv.var_declared.contains(hash)
+                has_param_exprs && fv.var_declared.contains(*name)
             });
 
             if let Some(parent_index) = self.records[index].parent {
                 let parent_fv = self.records[parent_index].fv();
-                for (hash, name) in free_names {
-                    parent_fv.used.insert(*hash, name.clone());
+                for name in free_names {
+                    parent_fv.used.insert(name.clone());
                 }
                 // Propagate flags to parent.
                 let eval = self.records[index].contains_direct_call_to_eval;
@@ -571,7 +558,7 @@ impl ScopeCollector {
                 self.records[parent_index].uses_this |= this;
                 self.records[parent_index].contains_await_expression |= await_;
             } else {
-                self.free_variables.extend(free_names.map(|(_, name)| name.clone()));
+                self.free_variables.extend(free_names.cloned());
             }
             self.current = self.records[index].parent;
             return;
@@ -608,8 +595,9 @@ impl ScopeCollector {
             let index = self.current.expect("no current scope");
             if self.is_free_var_only() {
                 self.records[index]
-                    .fv().declared
-                    .insert(name_hash(name));
+                    .fv()
+                    .declared
+                    .insert(Utf16String::from(name));
             } else {
                 self.records[index].variable(name).flags |= VarFlags::BOUND;
             }
@@ -680,8 +668,9 @@ impl ScopeCollector {
             let index = self.current.expect("no current scope");
             for name in bound_names {
                 self.records[index]
-                    .fv().declared
-                    .insert(name_hash(name));
+                    .fv()
+                    .declared
+                    .insert(Utf16String::from(*name));
             }
             return;
         }
@@ -719,17 +708,19 @@ impl ScopeCollector {
             // function scope's declared_names.
             let index = self.current.expect("no current scope");
             for (name, _) in bound_names {
-                let h = name_hash(name);
+                let utf16_name = Utf16String::from(*name);
                 // Walk up to find function boundary
                 let mut scope_index = index;
                 loop {
                     if self.records[scope_index].is_top_level() {
                         self.records[scope_index]
-                            .fv().declared
-                            .insert(h);
+                            .fv()
+                            .declared
+                            .insert(utf16_name.clone());
                         self.records[scope_index]
-                            .fv().var_declared
-                            .insert(h);
+                            .fv()
+                            .var_declared
+                            .insert(utf16_name);
                         break;
                     }
                     scope_index = self.records[scope_index]
@@ -791,18 +782,18 @@ impl ScopeCollector {
             // tracking we just need to know the name is declared.
             let index = self.current.expect("no current scope");
             let scope_level = self.records[index].scope_level;
-            if scope_level != ScopeLevel::NotTopLevel
-                && scope_level != ScopeLevel::ModuleTopLevel
-            {
+            if scope_level != ScopeLevel::NotTopLevel && scope_level != ScopeLevel::ModuleTopLevel {
                 // Top-level: function decl acts like var (hoists to function scope)
                 self.records[index]
-                    .fv().declared
-                    .insert(name_hash(name));
+                    .fv()
+                    .declared
+                    .insert(Utf16String::from(name));
             } else {
                 // Block-level: treated as block-scoped declaration
                 self.records[index]
-                    .fv().declared
-                    .insert(name_hash(name));
+                    .fv()
+                    .declared
+                    .insert(Utf16String::from(name));
             }
             return;
         }
@@ -863,8 +854,9 @@ impl ScopeCollector {
             let index = self.current.expect("no current scope");
             for name in bound_names {
                 self.records[index]
-                    .fv().declared
-                    .insert(name_hash(name));
+                    .fv()
+                    .declared
+                    .insert(Utf16String::from(*name));
             }
             return;
         }
@@ -879,8 +871,9 @@ impl ScopeCollector {
         if self.is_free_var_only() {
             let index = self.current.expect("no current scope");
             self.records[index]
-                .fv().declared
-                .insert(name_hash(name));
+                .fv()
+                .declared
+                .insert(Utf16String::from(name));
             return;
         }
         let index = self.current.expect("no current scope");
@@ -900,10 +893,10 @@ impl ScopeCollector {
         if self.is_free_var_only() {
             // In FreeVarOnly mode, just track the name as used.
             if let Some(index) = self.current {
-                let h = name_hash(name);
                 self.records[index]
-                    .fv().used
-                    .entry(h).or_insert_with(|| Utf16String::from(name));
+                    .fv()
+                    .used
+                    .insert(Utf16String::from(name));
             }
             return;
         }
@@ -938,9 +931,7 @@ impl ScopeCollector {
                 self.records[index].has_parameter_expressions = has_parameter_expressions;
                 for entry in entries {
                     if !entry.name.is_empty() {
-                        self.records[index]
-                            .fv().declared
-                            .insert(name_hash(&entry.name));
+                        self.records[index].fv().declared.insert(entry.name.clone());
                     }
                 }
             }
@@ -1440,9 +1431,7 @@ impl ScopeCollector {
                 if !group.captured_by_nested_function && !group.used_inside_with_statement {
                     if records[index].poisoned_by_eval_in_scope_chain
                         || records[index].has_lazy_inner_function
-                        || records[index]
-                            .lazy_function_free_vars
-                            .contains(&name)
+                        || records[index].lazy_function_free_vars.contains(&name)
                     {
                         continue;
                     }
@@ -1654,8 +1643,8 @@ impl ScopeCollector {
                 record.contains_direct_call_to_eval || record.poisoned_by_eval_in_scope_chain;
             sd.contains_access_to_arguments_object =
                 record.contains_access_to_arguments_object_in_non_strict_mode;
-            sd.has_lazy_inner_function = record.has_lazy_inner_function
-                || !record.lazy_function_free_vars.is_empty();
+            sd.has_lazy_inner_function =
+                record.has_lazy_inner_function || !record.lazy_function_free_vars.is_empty();
         }
     }
 
