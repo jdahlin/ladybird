@@ -450,6 +450,7 @@ impl<'a> Lexer<'a> {
         self.source.len()
     }
 
+    #[inline(always)]
     fn consume(&mut self) {
         if self.position > self.source_len() {
             return;
@@ -501,10 +502,12 @@ impl<'a> Lexer<'a> {
         cp
     }
 
+    #[inline(always)]
     fn is_eof(&self) -> bool {
         self.eof
     }
 
+    #[inline(always)]
     fn is_line_terminator(&self) -> bool {
         let cu = self.current_code_unit;
         if cu == ch(b'\n') || cu == ch(b'\r') {
@@ -517,6 +520,7 @@ impl<'a> Lexer<'a> {
         is_line_terminator_cp(self.current_code_unit as u32)
     }
 
+    #[inline(always)]
     fn is_whitespace(&self) -> bool {
         if is_ascii_space(self.current_code_unit) {
             return true;
@@ -981,89 +985,100 @@ impl<'a> Lexer<'a> {
         let mut token_message: Option<String> = None;
 
         if !in_template || self.current_template_state().in_expression {
-            loop {
-                if self.is_line_terminator() {
-                    line_has_token_yet = false;
-                    loop {
-                        self.consume();
-                        if !self.is_line_terminator() {
-                            break;
-                        }
-                    }
-                } else if self.is_whitespace() {
-                    // ASCII non-LT whitespace fast path (space, tab, VT, FF).
-                    while !self.eof
-                        && self.current_code_unit < 128
-                        && matches!(self.current_code_unit as u8, b' ' | b'\t' | 0x0B | 0x0C)
-                    {
-                        self.line_column += 1;
-                        if self.position < self.source.len() {
-                            self.current_code_unit = self.source[self.position];
-                            self.position += 1;
-                        } else {
-                            self.eof = true;
-                            self.current_code_unit = 0;
-                            self.position = self.source.len() + 1;
-                            self.line_column += 1;
-                            break;
-                        }
-                    }
-                    // Fall back to general loop for remaining non-ASCII whitespace.
-                    while self.is_whitespace() {
-                        self.consume();
-                    }
-                } else if self.is_line_comment_start(line_has_token_yet) {
-                    self.consume();
-                    // ASCII line comment fast path: skip non-LT ASCII chars directly.
-                    while !self.eof
-                        && self.current_code_unit < 128
-                        && self.current_code_unit != b'\n' as u16
-                        && self.current_code_unit != b'\r' as u16
-                    {
-                        self.line_column += 1;
-                        if self.position < self.source.len() {
-                            self.current_code_unit = self.source[self.position];
-                            self.position += 1;
-                        } else {
-                            self.eof = true;
-                            self.current_code_unit = 0;
-                            self.position = self.source.len() + 1;
-                            self.line_column += 1;
-                            break;
-                        }
-                    }
-                    // Fall back for non-ASCII (LS/PS line terminators).
-                    loop {
-                        if self.is_eof() || self.is_line_terminator() {
-                            break;
-                        }
-                        self.consume();
-                    }
-                } else if self.is_block_comment_start() {
-                    let start_line_number = self.line_number;
-                    self.consume();
-                    loop {
-                        self.consume();
-                        if self.is_eof() || self.is_block_comment_end() {
-                            break;
-                        }
-                    }
-                    if self.is_eof() {
-                        unterminated_comment = true;
-                    }
-                    self.consume(); // consume *
-                    if self.is_eof() {
-                        unterminated_comment = true;
-                    }
-                    self.consume(); // consume /
-
-                    if start_line_number != self.line_number {
+            // Fast skip: if current char is ASCII and not whitespace/LT/slash/hash/dash/lt,
+            // there's no trivia to consume. This avoids the is_line_terminator() and
+            // is_whitespace() calls for the common case in minified JS.
+            let cu = self.current_code_unit;
+            if cu >= 128
+                || matches!(
+                    cu as u8,
+                    b'\t' | b'\n' | 0x0B | 0x0C | b'\r' | b' ' | b'/' | b'<' | b'-' | b'#'
+                )
+            {
+                loop {
+                    if self.is_line_terminator() {
                         line_has_token_yet = false;
+                        loop {
+                            self.consume();
+                            if !self.is_line_terminator() {
+                                break;
+                            }
+                        }
+                    } else if self.is_whitespace() {
+                        // ASCII non-LT whitespace fast path (space, tab, VT, FF).
+                        while !self.eof
+                            && self.current_code_unit < 128
+                            && matches!(self.current_code_unit as u8, b' ' | b'\t' | 0x0B | 0x0C)
+                        {
+                            self.line_column += 1;
+                            if self.position < self.source.len() {
+                                self.current_code_unit = self.source[self.position];
+                                self.position += 1;
+                            } else {
+                                self.eof = true;
+                                self.current_code_unit = 0;
+                                self.position = self.source.len() + 1;
+                                self.line_column += 1;
+                                break;
+                            }
+                        }
+                        // Fall back to general loop for remaining non-ASCII whitespace.
+                        while self.is_whitespace() {
+                            self.consume();
+                        }
+                    } else if self.is_line_comment_start(line_has_token_yet) {
+                        self.consume();
+                        // ASCII line comment fast path: skip non-LT ASCII chars directly.
+                        while !self.eof
+                            && self.current_code_unit < 128
+                            && self.current_code_unit != b'\n' as u16
+                            && self.current_code_unit != b'\r' as u16
+                        {
+                            self.line_column += 1;
+                            if self.position < self.source.len() {
+                                self.current_code_unit = self.source[self.position];
+                                self.position += 1;
+                            } else {
+                                self.eof = true;
+                                self.current_code_unit = 0;
+                                self.position = self.source.len() + 1;
+                                self.line_column += 1;
+                                break;
+                            }
+                        }
+                        // Fall back for non-ASCII (LS/PS line terminators).
+                        loop {
+                            if self.is_eof() || self.is_line_terminator() {
+                                break;
+                            }
+                            self.consume();
+                        }
+                    } else if self.is_block_comment_start() {
+                        let start_line_number = self.line_number;
+                        self.consume();
+                        loop {
+                            self.consume();
+                            if self.is_eof() || self.is_block_comment_end() {
+                                break;
+                            }
+                        }
+                        if self.is_eof() {
+                            unterminated_comment = true;
+                        }
+                        self.consume(); // consume *
+                        if self.is_eof() {
+                            unterminated_comment = true;
+                        }
+                        self.consume(); // consume /
+
+                        if start_line_number != self.line_number {
+                            line_has_token_yet = false;
+                        }
+                    } else {
+                        break;
                     }
-                } else {
-                    break;
                 }
-            }
+            } // end fast-skip if
         }
 
         let value_start = self.position;
