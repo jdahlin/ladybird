@@ -554,10 +554,7 @@ impl<'a, const SYNTAX_CHECK: bool> Parser<'a, SYNTAX_CHECK> {
         // Register parameter names with the scope collector. In FreeVarOnly
         // mode, this tracks them as declared_names so free variable tracking
         // can subtract them and correctly detect has_parameter_expressions.
-        self.register_function_parameters_with_scope(
-            &parsed.parameters,
-            &parsed.parameter_info,
-        );
+        self.register_function_parameters_with_scope(&parsed.parameters, &parsed.parameter_info);
 
         self.flags.in_generator_function_context = in_generator_before;
         self.flags.await_expression_is_valid = await_before;
@@ -1303,7 +1300,8 @@ impl<'a, const SYNTAX_CHECK: bool> Parser<'a, SYNTAX_CHECK> {
                             self.scope_collector.set_contains_direct_call_to_eval();
                             self.scope_collector.set_uses_this();
                         }
-                        self.scope_collector.use_identifier_in_free_var_tracking(&value);
+                        self.scope_collector
+                            .use_identifier_in_free_var_tracking(&value);
                     }
                     TokenType::Eof => break,
                     _ => {}
