@@ -77,6 +77,9 @@ macro_rules! utf16 {
     }};
 }
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 pub mod ast;
 pub mod ast_dump;
 pub mod bytecode;

@@ -22,6 +22,13 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/cc/cc-1.2.57.crate",
+        "sha256": "7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423",
+        "dest": "cargo/vendor/cc-1.2.57"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/core_maths/core_maths-0.1.1.crate",
         "sha256": "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30",
         "dest": "cargo/vendor/core_maths-0.1.1"
@@ -32,6 +39,13 @@
         "url": "https://static.crates.io/crates/displaydoc/displaydoc-0.2.5.crate",
         "sha256": "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0",
         "dest": "cargo/vendor/displaydoc-0.2.5"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/find-msvc-tools/find-msvc-tools-0.1.9.crate",
+        "sha256": "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582",
+        "dest": "cargo/vendor/find-msvc-tools-0.1.9"
     },
     {
         "type": "archive",
@@ -92,6 +106,13 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/libc/libc-0.2.183.crate",
+        "sha256": "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d",
+        "dest": "cargo/vendor/libc-0.2.183"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/libm/libm-0.2.16.crate",
         "sha256": "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981",
         "dest": "cargo/vendor/libm-0.2.16"
@@ -99,9 +120,23 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/libmimalloc-sys/libmimalloc-sys-0.1.44.crate",
+        "sha256": "667f4fec20f29dfc6bc7357c582d91796c169ad7e2fce709468aefeb2c099870",
+        "dest": "cargo/vendor/libmimalloc-sys-0.1.44"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/litemap/litemap-0.8.1.crate",
         "sha256": "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77",
         "dest": "cargo/vendor/litemap-0.8.1"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/mimalloc/mimalloc-0.1.48.crate",
+        "sha256": "e1ee66a4b64c74f4ef288bcbb9192ad9c3feaad75193129ac8509af543894fd8",
+        "dest": "cargo/vendor/mimalloc-0.1.48"
     },
     {
         "type": "archive",
@@ -148,6 +183,13 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/rustc-hash/rustc-hash-2.1.1.crate",
+        "sha256": "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d",
+        "dest": "cargo/vendor/rustc-hash-2.1.1"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/serde/serde-1.0.228.crate",
         "sha256": "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e",
         "dest": "cargo/vendor/serde-1.0.228"
@@ -165,6 +207,13 @@
         "url": "https://static.crates.io/crates/serde_derive/serde_derive-1.0.228.crate",
         "sha256": "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79",
         "dest": "cargo/vendor/serde_derive-1.0.228"
+    },
+    {
+        "type": "archive",
+        "archive-type": "tar-gzip",
+        "url": "https://static.crates.io/crates/shlex/shlex-1.3.0.crate",
+        "sha256": "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64",
+        "dest": "cargo/vendor/shlex-1.3.0"
     },
     {
         "type": "archive",
@@ -262,8 +311,10 @@
         "commands": [
             "echo '{\"files\": {}, \"package\": \"c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8\"}' > cargo/vendor/autocfg-1.5.0/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"3a0b39595c6ee54a8d0900204ba4c401d0ab4eb45adaf07178e8d017541529e7\"}' > cargo/vendor/calendrical_calculations-0.2.3/.cargo-checksum.json",
+            "echo '{\"files\": {}, \"package\": \"7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423\"}' > cargo/vendor/cc-1.2.57/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30\"}' > cargo/vendor/core_maths-0.1.1/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0\"}' > cargo/vendor/displaydoc-0.2.5/.cargo-checksum.json",
+            "echo '{\"files\": {}, \"package\": \"5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582\"}' > cargo/vendor/find-msvc-tools-0.1.9/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"d6f0e52e009b6b16ba9c0693578796f2dd4aaa59a7f8f920423706714a89ac4e\"}' > cargo/vendor/icu_calendar-2.1.1/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"527f04223b17edfe0bd43baf14a0cb1b017830db65f3950dc00224860a9a446d\"}' > cargo/vendor/icu_calendar_data-2.1.1/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"4c6b649701667bbe825c3b7e6388cb521c23d88644678e83c0c4d0a621a34b43\"}' > cargo/vendor/icu_collections-2.1.1/.cargo-checksum.json",
@@ -272,17 +323,22 @@
             "echo '{\"files\": {}, \"package\": \"1c5f1d16b4c3a2642d3a719f18f6b06070ab0aef246a6418130c955ae08aa831\"}' > cargo/vendor/icu_locale_data-2.1.2/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"85962cf0ce02e1e0a629cc34e7ca3e373ce20dda4c4d7294bbd0bf1fdb59e614\"}' > cargo/vendor/icu_provider-2.1.1/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"84de9d95a6d2547d9b77ee3f25fa0ee32e3c3a6484d47a55adebc0439c077992\"}' > cargo/vendor/ixdtf-0.6.4/.cargo-checksum.json",
+            "echo '{\"files\": {}, \"package\": \"b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d\"}' > cargo/vendor/libc-0.2.183/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981\"}' > cargo/vendor/libm-0.2.16/.cargo-checksum.json",
+            "echo '{\"files\": {}, \"package\": \"667f4fec20f29dfc6bc7357c582d91796c169ad7e2fce709468aefeb2c099870\"}' > cargo/vendor/libmimalloc-sys-0.1.44/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77\"}' > cargo/vendor/litemap-0.8.1/.cargo-checksum.json",
+            "echo '{\"files\": {}, \"package\": \"e1ee66a4b64c74f4ef288bcbb9192ad9c3feaad75193129ac8509af543894fd8\"}' > cargo/vendor/mimalloc-0.1.48/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9\"}' > cargo/vendor/num-bigint-0.4.6/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f\"}' > cargo/vendor/num-integer-0.1.46/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841\"}' > cargo/vendor/num-traits-0.2.19/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"b73949432f5e2a09657003c25bca5e19a0e9c84f8058ca374f49e0ebe605af77\"}' > cargo/vendor/potential_utf-0.1.4/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934\"}' > cargo/vendor/proc-macro2-1.0.106/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924\"}' > cargo/vendor/quote-1.0.45/.cargo-checksum.json",
+            "echo '{\"files\": {}, \"package\": \"357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d\"}' > cargo/vendor/rustc-hash-2.1.1/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e\"}' > cargo/vendor/serde-1.0.228/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad\"}' > cargo/vendor/serde_core-1.0.228/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79\"}' > cargo/vendor/serde_derive-1.0.228/.cargo-checksum.json",
+            "echo '{\"files\": {}, \"package\": \"0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64\"}' > cargo/vendor/shlex-1.3.0/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596\"}' > cargo/vendor/stable_deref_trait-1.2.1/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99\"}' > cargo/vendor/syn-2.0.117/.cargo-checksum.json",
             "echo '{\"files\": {}, \"package\": \"728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2\"}' > cargo/vendor/synstructure-0.13.2/.cargo-checksum.json",
