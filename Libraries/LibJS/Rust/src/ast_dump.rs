@@ -1032,6 +1032,7 @@ fn dump_expression(expression: &Expression, state: &DumpState) {
             dump_expression(argument, &child_state(state, true));
         }
 
+        ExpressionKind::SyntaxOnly(_) => {}
         ExpressionKind::Error => {
             dump_node!(state, "ErrorExpression", &expression.range);
         }
@@ -1197,10 +1198,15 @@ fn dump_function(
     }
 
     print_node(&child_state(state, true), &color_label(state, "body"));
-    dump_statement(
-        &function_data.body,
-        &child_state(&child_state(state, true), true),
-    );
+    match &function_data.body {
+        crate::ast::FunctionBodyKind::Parsed(body) => {
+            dump_statement(body, &child_state(&child_state(state, true), true));
+        }
+        crate::ast::FunctionBodyKind::Lazy(lazy) => {
+            let s = &child_state(&child_state(state, true), true);
+            print_node(s, &format!("[lazy: offset {}]", lazy.body_start_offset));
+        }
+    }
 }
 
 fn dump_class(
