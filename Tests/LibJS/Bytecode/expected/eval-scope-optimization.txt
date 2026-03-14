@@ -13,3 +13,4 @@ JS bytecode executable "outer"
 [  60]       GetGlobal dst:reg6, identifier:Number
 [  78]       CallConstruct dst:reg5, callee:reg6, Number, arguments:[Int32(42)]
 [  98]       Return value:reg5
+

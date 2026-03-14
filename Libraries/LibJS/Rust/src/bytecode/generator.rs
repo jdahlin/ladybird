@@ -9,8 +9,8 @@
 //! This module contains the `Generator` struct which manages all state
 //! needed for bytecode generation from the AST.
 
-use std::cell::RefCell;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::basic_block::{BasicBlock, SourceMapEntry};

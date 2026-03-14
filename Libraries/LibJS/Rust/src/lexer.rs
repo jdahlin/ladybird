@@ -69,7 +69,7 @@ pub struct Lexer<'a> {
     regex_is_in_character_class: bool,
     allow_html_comments: bool,
     template_states: Vec<TemplateState>,
-    saved_states: Vec<SavedLexerState>,
+    pub(crate) saved_states: Vec<SavedLexerState>,
 }
 
 // Unicode constants used by the lexical grammar.
@@ -384,7 +384,6 @@ fn keyword_from_str(s: &[u16]) -> Option<TokenType> {
     }
     None
 }
-
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a [u16], line_number: u32, line_column: u32) -> Self {
@@ -1170,15 +1169,23 @@ impl<'a> Lexer<'a> {
                     "Start of private name '#' but not followed by valid identifier".to_string(),
                 );
             }
-        } else if self.current_code_unit < 128
-            && ASCII_ID_START[self.current_code_unit as usize]
-        {
+        } else if self.current_code_unit < 128 && ASCII_ID_START[self.current_code_unit as usize] {
             // ASCII identifier fast path — skip is_identifier_start/current_code_point overhead.
             let has_escape = self.scan_identifier_body(1);
-            self.classify_identifier(has_escape, value_start, &mut token_type, &mut identifier_value);
+            self.classify_identifier(
+                has_escape,
+                value_start,
+                &mut token_type,
+                &mut identifier_value,
+            );
         } else if let Some((_cp, len)) = self.is_identifier_start() {
             let has_escape = self.scan_identifier_body(len);
-            self.classify_identifier(has_escape, value_start, &mut token_type, &mut identifier_value);
+            self.classify_identifier(
+                has_escape,
+                value_start,
+                &mut token_type,
+                &mut identifier_value,
+            );
         } else if self.is_numeric_literal_start() {
             token_type = TokenType::NumericLiteral;
             let mut is_invalid = false;
@@ -1326,29 +1333,71 @@ impl<'a> Lexer<'a> {
         } else if is_ascii(self.current_code_unit) {
             // Inline operator dispatch: handle each ASCII operator character directly
             // instead of cascading through match4/parse_three_char/parse_two_char/single_char.
-            let next = if self.position < self.source.len() { self.source[self.position] } else { 0 };
-            let next2 = if self.position + 1 < self.source.len() { self.source[self.position + 1] } else { 0 };
+            let next = if self.position < self.source.len() {
+                self.source[self.position]
+            } else {
+                0
+            };
+            let next2 = if self.position + 1 < self.source.len() {
+                self.source[self.position + 1]
+            } else {
+                0
+            };
             match self.current_code_unit as u8 {
-                b';' => { token_type = TokenType::Semicolon; self.consume(); }
-                b',' => { token_type = TokenType::Comma; self.consume(); }
-                b'(' => { token_type = TokenType::ParenOpen; self.consume(); }
-                b')' => { token_type = TokenType::ParenClose; self.consume(); }
-                b'[' => { token_type = TokenType::BracketOpen; self.consume(); }
-                b']' => { token_type = TokenType::BracketClose; self.consume(); }
-                b'{' => { token_type = TokenType::CurlyOpen; self.consume(); }
-                b'}' => { token_type = TokenType::CurlyClose; self.consume(); }
-                b':' => { token_type = TokenType::Colon; self.consume(); }
-                b'~' => { token_type = TokenType::Tilde; self.consume(); }
+                b';' => {
+                    token_type = TokenType::Semicolon;
+                    self.consume();
+                }
+                b',' => {
+                    token_type = TokenType::Comma;
+                    self.consume();
+                }
+                b'(' => {
+                    token_type = TokenType::ParenOpen;
+                    self.consume();
+                }
+                b')' => {
+                    token_type = TokenType::ParenClose;
+                    self.consume();
+                }
+                b'[' => {
+                    token_type = TokenType::BracketOpen;
+                    self.consume();
+                }
+                b']' => {
+                    token_type = TokenType::BracketClose;
+                    self.consume();
+                }
+                b'{' => {
+                    token_type = TokenType::CurlyOpen;
+                    self.consume();
+                }
+                b'}' => {
+                    token_type = TokenType::CurlyClose;
+                    self.consume();
+                }
+                b':' => {
+                    token_type = TokenType::Colon;
+                    self.consume();
+                }
+                b'~' => {
+                    token_type = TokenType::Tilde;
+                    self.consume();
+                }
                 b'=' => {
                     if next == b'=' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::EqualsEqualsEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::EqualsEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'>' as u16 {
                         token_type = TokenType::Arrow;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Equals;
                         self.consume();
@@ -1357,10 +1406,13 @@ impl<'a> Lexer<'a> {
                 b'!' => {
                     if next == b'=' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::ExclamationMarkEqualsEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::ExclamationMarkEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::ExclamationMark;
                         self.consume();
@@ -1369,10 +1421,12 @@ impl<'a> Lexer<'a> {
                 b'+' => {
                     if next == b'+' as u16 {
                         token_type = TokenType::PlusPlus;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::PlusEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Plus;
                         self.consume();
@@ -1381,10 +1435,12 @@ impl<'a> Lexer<'a> {
                 b'-' => {
                     if next == b'-' as u16 {
                         token_type = TokenType::MinusMinus;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::MinusEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Minus;
                         self.consume();
@@ -1393,13 +1449,17 @@ impl<'a> Lexer<'a> {
                 b'*' => {
                     if next == b'*' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::DoubleAsteriskEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'*' as u16 {
                         token_type = TokenType::DoubleAsterisk;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::AsteriskEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Asterisk;
                         self.consume();
@@ -1408,7 +1468,8 @@ impl<'a> Lexer<'a> {
                 b'/' => {
                     if next == b'=' as u16 {
                         token_type = TokenType::SlashEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Slash;
                         self.consume();
@@ -1417,7 +1478,8 @@ impl<'a> Lexer<'a> {
                 b'%' => {
                     if next == b'=' as u16 {
                         token_type = TokenType::PercentEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Percent;
                         self.consume();
@@ -1426,13 +1488,17 @@ impl<'a> Lexer<'a> {
                 b'&' => {
                     if next == b'&' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::DoubleAmpersandEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'&' as u16 {
                         token_type = TokenType::DoubleAmpersand;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::AmpersandEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Ampersand;
                         self.consume();
@@ -1441,13 +1507,17 @@ impl<'a> Lexer<'a> {
                 b'|' => {
                     if next == b'|' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::DoublePipeEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'|' as u16 {
                         token_type = TokenType::DoublePipe;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::PipeEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Pipe;
                         self.consume();
@@ -1456,7 +1526,8 @@ impl<'a> Lexer<'a> {
                 b'^' => {
                     if next == b'=' as u16 {
                         token_type = TokenType::CaretEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Caret;
                         self.consume();
@@ -1465,13 +1536,17 @@ impl<'a> Lexer<'a> {
                 b'<' => {
                     if next == b'<' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::ShiftLeftEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'<' as u16 {
                         token_type = TokenType::ShiftLeft;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::LessThanEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::LessThan;
                         self.consume();
@@ -1480,23 +1555,36 @@ impl<'a> Lexer<'a> {
                 b'>' => {
                     if next == b'>' as u16 && next2 == b'>' as u16 {
                         // Check for >>>= (4-char token)
-                        let next3 = if self.position + 2 < self.source.len() { self.source[self.position + 2] } else { 0 };
+                        let next3 = if self.position + 2 < self.source.len() {
+                            self.source[self.position + 2]
+                        } else {
+                            0
+                        };
                         if next3 == b'=' as u16 {
                             token_type = TokenType::UnsignedShiftRightEquals;
-                            self.consume(); self.consume(); self.consume(); self.consume();
+                            self.consume();
+                            self.consume();
+                            self.consume();
+                            self.consume();
                         } else {
                             token_type = TokenType::UnsignedShiftRight;
-                            self.consume(); self.consume(); self.consume();
+                            self.consume();
+                            self.consume();
+                            self.consume();
                         }
                     } else if next == b'>' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::ShiftRightEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'>' as u16 {
                         token_type = TokenType::ShiftRight;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'=' as u16 {
                         token_type = TokenType::GreaterThanEquals;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::GreaterThan;
                         self.consume();
@@ -1505,16 +1593,20 @@ impl<'a> Lexer<'a> {
                 b'?' => {
                     if next == b'?' as u16 && next2 == b'=' as u16 {
                         token_type = TokenType::DoubleQuestionMarkEquals;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'?' as u16 {
                         token_type = TokenType::DoubleQuestionMark;
-                        self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
                     } else if next == b'.' as u16 {
                         // https://tc39.es/ecma262/#sec-punctuators
                         // OptionalChainingPunctuator :: `?.` [lookahead ∉ DecimalDigit]
                         if !is_ascii_digit(next2) {
                             token_type = TokenType::QuestionMarkPeriod;
-                            self.consume(); self.consume();
+                            self.consume();
+                            self.consume();
                         } else {
                             token_type = TokenType::QuestionMark;
                             self.consume();
@@ -1527,7 +1619,9 @@ impl<'a> Lexer<'a> {
                 b'.' => {
                     if next == b'.' as u16 && next2 == b'.' as u16 {
                         token_type = TokenType::TripleDot;
-                        self.consume(); self.consume(); self.consume();
+                        self.consume();
+                        self.consume();
+                        self.consume();
                     } else {
                         token_type = TokenType::Period;
                         self.consume();
