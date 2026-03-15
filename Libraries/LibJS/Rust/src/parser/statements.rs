@@ -84,13 +84,23 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
         while !self.match_token(TokenType::CurlyClose) && !self.done() {
             if self.match_declaration() {
-                children.push(self.parse_declaration());
+                let s = self.parse_declaration();
+                if !SYNTAX_ONLY {
+                    children.push(s);
+                }
             } else {
-                children.push(self.parse_statement(true));
+                let s = self.parse_statement(true);
+                if !SYNTAX_ONLY {
+                    children.push(s);
+                }
             }
         }
 
         self.consume_token(TokenType::CurlyClose);
+        if SYNTAX_ONLY {
+            self.scope_collector.close_scope();
+            return self.statement(start, StatementKind::Empty);
+        }
         let scope = ScopeData::shared_with_children(children);
         self.scope_collector.set_scope_node(scope.clone());
         self.scope_collector.close_scope();
@@ -121,6 +131,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
         let expression = self.parse_expression_any();
         self.consume_or_insert_semicolon();
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(start, StatementKind::Expression(Box::new(expression)))
     }
 
@@ -150,6 +163,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
         let argument = self.parse_expression_any();
         self.consume_or_insert_semicolon();
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(start, StatementKind::Return(Some(Box::new(argument))))
     }
 
@@ -167,6 +183,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
         let argument = self.parse_expression_any();
         self.consume_or_insert_semicolon();
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(start, StatementKind::Throw(Box::new(argument)))
     }
 
@@ -298,6 +317,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
             None
         };
 
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(
             start,
             StatementKind::If(Box::new(IfStatementData {
@@ -315,6 +337,10 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
         let start = if_start;
         self.scope_collector.open_block_scope(None);
         let declaration = self.parse_function_declaration();
+        if SYNTAX_ONLY {
+            self.scope_collector.close_scope();
+            return self.statement(start, StatementKind::Empty);
+        }
         let scope = ScopeData::shared_with_children(vec![declaration]);
         self.scope_collector.set_scope_node(scope.clone());
         self.scope_collector.close_scope();
@@ -342,6 +368,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
         let body = self.parse_loop_body();
 
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(
             start,
             StatementKind::While(Box::new(WhileStatementData {
@@ -366,6 +395,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
         // the regular ASI rules not applying.
         self.eat(TokenType::Semicolon);
 
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(
             start,
             StatementKind::DoWhile(Box::new(WhileStatementData {
@@ -460,6 +492,10 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
             let body = self.parse_loop_body();
 
+            if SYNTAX_ONLY {
+                let result = self.statement(forin_start, StatementKind::Empty);
+                return self.close_for_loop_scope(start, result);
+            }
             let lhs = self.synthesize_for_in_of_lhs(init, init_start);
             let result = self.statement(
                 forin_start,
@@ -516,6 +552,10 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
                 let body = self.parse_loop_body();
 
+                if SYNTAX_ONLY {
+                    let result = self.statement(forof_start, StatementKind::Empty);
+                    return self.close_for_loop_scope(start, result);
+                }
                 let lhs = self.synthesize_for_in_of_lhs(init, init_start);
                 let for_of_kind = if is_await {
                     ForInOfKind::ForAwaitOf
@@ -547,11 +587,17 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
             }
         }
         self.consume_token(TokenType::Semicolon);
-        let for_init = match init {
-            LocalForInit::Declaration(declaration) => {
-                Some(ForInit::Declaration(Box::new(declaration)))
+        let for_init = if SYNTAX_ONLY {
+            None
+        } else {
+            match init {
+                LocalForInit::Declaration(declaration) => {
+                    Some(ForInit::Declaration(Box::new(declaration)))
+                }
+                LocalForInit::Expression(expression) => {
+                    Some(ForInit::Expression(Box::new(expression)))
+                }
             }
-            LocalForInit::Expression(expression) => Some(ForInit::Expression(Box::new(expression))),
         };
         let result = self.parse_standard_for_loop(start, for_init);
         self.close_for_loop_scope(start, result)
@@ -560,6 +606,10 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
     /// Close the for-loop scope and wrap the for-loop statement in a Block
     /// with scope data.
     fn close_for_loop_scope(&mut self, start: Position, inner: Statement) -> Statement {
+        if SYNTAX_ONLY {
+            self.scope_collector.close_scope();
+            return self.statement(start, StatementKind::Empty);
+        }
         let scope = ScopeData::shared_with_children(vec![inner]);
         self.scope_collector.set_scope_node(scope.clone());
         self.scope_collector.close_scope();
@@ -583,6 +633,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 
         let body = self.parse_loop_body();
 
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(
             start,
             StatementKind::For(Box::new(ForStatementData {
@@ -603,8 +656,14 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
         let object = self.parse_expression_any();
         self.consume_token(TokenType::ParenClose);
         self.scope_collector.open_with_scope(None);
+        let saved_in_with = self.flags.in_with_statement;
+        self.flags.in_with_statement = true;
         let body = self.parse_statement(false);
+        self.flags.in_with_statement = saved_in_with;
         self.scope_collector.close_scope();
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(
             start,
             StatementKind::With(Box::new(WithStatementData {
@@ -640,13 +699,19 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
                 }
                 has_default = true;
             }
-            cases.push(case);
+            if !SYNTAX_ONLY {
+                cases.push(case);
+            }
         }
 
         self.flags.in_break_context = break_before;
 
         self.consume_token(TokenType::CurlyClose);
 
+        if SYNTAX_ONLY {
+            self.scope_collector.close_scope();
+            return self.statement(start, StatementKind::Empty);
+        }
         let scope = ScopeData::new_shared();
         self.scope_collector.set_scope_node(scope.clone());
         self.scope_collector.close_scope();
@@ -683,12 +748,25 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
             && !self.done()
         {
             if self.match_declaration() {
-                children.push(self.parse_declaration());
+                let s = self.parse_declaration();
+                if !SYNTAX_ONLY {
+                    children.push(s);
+                }
             } else {
-                children.push(self.parse_statement(true));
+                let s = self.parse_statement(true);
+                if !SYNTAX_ONLY {
+                    children.push(s);
+                }
             }
         }
 
+        if SYNTAX_ONLY {
+            return SwitchCase {
+                range: self.range_from(start),
+                scope: ScopeData::new_shared(),
+                test,
+            };
+        }
         SwitchCase {
             range: self.range_from(start),
             scope: ScopeData::shared_with_children(children),
@@ -724,6 +802,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
             self.syntax_error("try statement must have a catch or finally clause");
         }
 
+        if SYNTAX_ONLY {
+            return self.statement(start, StatementKind::Empty);
+        }
         self.statement(
             start,
             StatementKind::Try(Box::new(TryStatementData {
@@ -989,6 +1070,9 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
         self.flags.in_break_context = break_before;
         self.last_inner_label_is_iteration = is_iteration;
 
+        if SYNTAX_ONLY {
+            return Some(self.statement(start, StatementKind::Empty));
+        }
         Some(self.statement(
             start,
             StatementKind::Labelled(Box::new(LabelledStatementData {
@@ -1023,20 +1107,20 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
     /// Validate that an expression-form LHS is valid for for-in/for-of.
     fn validate_for_in_of_lhs(&mut self, init: &LocalForInit) {
         if let LocalForInit::Expression(ref expression) = *init {
-            match &expression.inner {
-                // NewExpression is never a valid assignment target.
-                ExpressionKind::New(_) => {
-                    self.syntax_error("Invalid left-hand side in for-loop");
+            let class = expression.inner.classify();
+            match class {
+                ExpressionClass::Identifier
+                | ExpressionClass::Member
+                | ExpressionClass::Object
+                | ExpressionClass::Array => {}
+                ExpressionClass::Call => {
+                    if self.flags.strict_mode {
+                        self.syntax_error("Invalid left-hand side in for-loop");
+                    }
                 }
-                // CallExpression is a valid assignment target only in non-strict mode (web compat).
-                ExpressionKind::Call(_) if self.flags.strict_mode => {
-                    self.syntax_error("Invalid left-hand side in for-loop");
-                }
-                ExpressionKind::Identifier(_)
-                | ExpressionKind::Member(_)
-                | ExpressionKind::Call(_)
-                | ExpressionKind::Object(_)
-                | ExpressionKind::Array(_) => {}
+                // In syntax-check mode we can't distinguish New from other
+                // expressions, so skip this validation.
+                ExpressionClass::Other if SYNTAX_ONLY => {}
                 _ => {
                     self.syntax_error("Invalid left-hand side in for-loop");
                 }
