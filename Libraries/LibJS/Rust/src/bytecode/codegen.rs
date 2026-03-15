@@ -349,6 +349,7 @@ fn generate_expression_inner(
             None
         }
 
+        ExpressionKind::SyntaxOnly(_) => unreachable!("SyntaxOnly in codegen"),
         ExpressionKind::Error => None,
     }
 }
@@ -6099,7 +6100,7 @@ fn generate_class_expression(
                             name: None,
                             source_text_start: init_expression.range.start.offset,
                             source_text_end: init_expression.range.end.offset,
-                            body: Box::new(wrapper_body),
+                            body: FunctionBodyKind::Parsed(Box::new(wrapper_body)),
                             parameters: Vec::new(),
                             function_length: 0,
                             kind: FunctionKind::Normal,
@@ -6175,7 +6176,7 @@ fn generate_class_expression(
                     name: None,
                     source_text_start: body.range.start.offset,
                     source_text_end: body.range.end.offset,
-                    body: body.clone(),
+                    body: FunctionBodyKind::Parsed(body.clone()),
                     parameters: Vec::new(),
                     function_length: 0,
                     kind: FunctionKind::Normal,
