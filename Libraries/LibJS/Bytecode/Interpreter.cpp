@@ -32,7 +32,6 @@
 #include <LibJS/Runtime/ECMAScriptFunctionObject.h>
 #include <LibJS/Runtime/Environment.h>
 #include <LibJS/Runtime/FunctionEnvironment.h>
-#include <LibJS/Runtime/GeneratorResult.h>
 #include <LibJS/Runtime/GlobalEnvironment.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/Iterator.h>
@@ -95,10 +94,13 @@ Interpreter::~Interpreter() = default;
 
 ALWAYS_INLINE Value Interpreter::do_yield(Value value, Optional<Label> continuation)
 {
-    // FIXME: If we get a pointer, which is not accurately representable as a double
-    //        will cause this to explode
-    auto continuation_value = continuation.has_value() ? Value(continuation->address()) : js_null();
-    return vm().heap().allocate<GeneratorResult>(value, continuation_value, false).ptr();
+    auto& context = running_execution_context();
+    if (continuation.has_value())
+        context.yield_continuation = continuation->address();
+    else
+        context.yield_continuation = {};
+    context.yield_is_await = false;
+    return value;
 }
 
 // 16.1.6 ScriptEvaluation ( scriptRecord ), https://tc39.es/ecma262/#sec-runtime-semantics-scriptevaluation
@@ -3130,11 +3132,10 @@ void Yield::execute_impl(Bytecode::Interpreter& interpreter) const
 void Await::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto yielded_value = interpreter.get(m_argument).is_special_empty_value() ? js_undefined() : interpreter.get(m_argument);
-    // FIXME: If we get a pointer, which is not accurately representable as a double
-    //        will cause this to explode
-    auto continuation_value = Value(m_continuation_label.address());
-    auto result = interpreter.vm().heap().allocate<GeneratorResult>(yielded_value, continuation_value, true);
-    interpreter.do_return(result);
+    auto& context = interpreter.running_execution_context();
+    context.yield_continuation = m_continuation_label.address();
+    context.yield_is_await = true;
+    interpreter.do_return(yielded_value);
 }
 
 ThrowCompletionOr<void> GetByValue::execute_impl(Bytecode::Interpreter& interpreter) const

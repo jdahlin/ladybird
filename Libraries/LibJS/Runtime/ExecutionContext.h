@@ -62,6 +62,11 @@ public:
     // FIXME: Move this out of LibJS (e.g. by using the CustomData concept), as it's used exclusively by LibWeb.
     u32 skip_when_determining_incumbent_counter { 0 };
 
+    // Non-standard: Used by generators/async generators to communicate yield/await
+    // state back to the caller without allocating a GC cell.
+    Optional<size_t> yield_continuation;
+    bool yield_is_await { false };
+
     Optional<Value> this_value;
 
     GC::Ptr<Bytecode::Executable> executable;
