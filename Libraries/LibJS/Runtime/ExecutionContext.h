@@ -64,8 +64,28 @@ public:
 
     // Non-standard: Used by generators/async generators to communicate yield/await
     // state back to the caller without allocating a GC cell.
-    Optional<size_t> yield_continuation;
-    bool yield_is_await { false };
+    // Encoding: 0 = no continuation; non-zero: low 31 bits = address + 1, bit 31 = is_await.
+    u32 yield_continuation_and_flags { 0 };
+
+    static constexpr u32 YIELD_IS_AWAIT_BIT = 1u << 31;
+
+    void set_yield_continuation(Optional<size_t> continuation, bool is_await)
+    {
+        if (!continuation.has_value())
+            yield_continuation_and_flags = 0;
+        else
+            yield_continuation_and_flags = static_cast<u32>(*continuation + 1) | (is_await ? YIELD_IS_AWAIT_BIT : 0);
+    }
+
+    Optional<size_t> yield_continuation() const
+    {
+        auto addr = yield_continuation_and_flags & ~YIELD_IS_AWAIT_BIT;
+        if (addr == 0)
+            return {};
+        return static_cast<size_t>(addr - 1);
+    }
+
+    bool yield_is_await() const { return (yield_continuation_and_flags & YIELD_IS_AWAIT_BIT) != 0; }
 
     Optional<Value> this_value;
 
@@ -114,8 +134,19 @@ public:
     ExecutionContext* caller_frame { nullptr };
     u32 passed_argument_count { 0 };
     u32 caller_return_pc { 0 };
-    u32 caller_dst_raw { 0 };
-    bool caller_is_construct { false };
+    // Bit 31 = is_construct, bits 0-30 = destination register operand raw value.
+    u32 caller_dst_raw_and_flags { 0 };
+
+    static constexpr u32 CALLER_IS_CONSTRUCT_BIT = 1u << 31;
+    static constexpr u32 CALLER_DST_MASK = ~CALLER_IS_CONSTRUCT_BIT;
+
+    void set_caller_dst(u32 dst_raw, bool is_construct)
+    {
+        caller_dst_raw_and_flags = (dst_raw & CALLER_DST_MASK) | (is_construct ? CALLER_IS_CONSTRUCT_BIT : 0);
+    }
+
+    u32 caller_dst_raw() const { return caller_dst_raw_and_flags & CALLER_DST_MASK; }
+    bool caller_is_construct() const { return (caller_dst_raw_and_flags & CALLER_IS_CONSTRUCT_BIT) != 0; }
 
 private:
     friend class Bytecode::Interpreter;

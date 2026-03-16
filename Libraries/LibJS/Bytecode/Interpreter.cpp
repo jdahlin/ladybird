@@ -95,11 +95,9 @@ Interpreter::~Interpreter() = default;
 ALWAYS_INLINE Value Interpreter::do_yield(Value value, Optional<Label> continuation)
 {
     auto& context = running_execution_context();
-    if (continuation.has_value())
-        context.yield_continuation = continuation->address();
-    else
-        context.yield_continuation = {};
-    context.yield_is_await = false;
+    context.set_yield_continuation(
+        continuation.has_value() ? Optional<size_t>(continuation->address()) : Optional<size_t> {},
+        false);
     return value;
 }
 
@@ -282,9 +280,8 @@ ExecutionContext* Interpreter::push_inline_frame(
 
     // Set up caller linkage so Return can restore the caller frame.
     callee_context->caller_frame = m_running_execution_context;
-    callee_context->caller_dst_raw = dst_raw;
+    callee_context->set_caller_dst(dst_raw, is_construct);
     callee_context->caller_return_pc = return_pc;
-    callee_context->caller_is_construct = is_construct;
 
     // Inlined PrepareForOrdinaryCall (avoids function call overhead on hot path).
     callee_context->function = &callee_function;
@@ -411,11 +408,11 @@ NEVER_INLINE void Interpreter::pop_inline_frame(Value return_value)
 {
     auto* callee_frame = m_running_execution_context;
     auto* caller_frame = callee_frame->caller_frame;
-    auto caller_dst_raw = callee_frame->caller_dst_raw;
+    auto caller_dst_raw = callee_frame->caller_dst_raw();
     auto caller_pc = callee_frame->caller_return_pc;
 
     // For base constructor calls, apply construct return semantics.
-    if (callee_frame->caller_is_construct && !return_value.is_object())
+    if (callee_frame->caller_is_construct() && !return_value.is_object())
         return_value = callee_frame->this_value.value();
 
     vm().pop_execution_context();
@@ -3133,8 +3130,7 @@ void Await::execute_impl(Bytecode::Interpreter& interpreter) const
 {
     auto yielded_value = interpreter.get(m_argument).is_special_empty_value() ? js_undefined() : interpreter.get(m_argument);
     auto& context = interpreter.running_execution_context();
-    context.yield_continuation = m_continuation_label.address();
-    context.yield_is_await = true;
+    context.set_yield_continuation(m_continuation_label.address(), true);
     interpreter.do_return(yielded_value);
 }
 

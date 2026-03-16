@@ -112,8 +112,7 @@ NonnullOwnPtr<ExecutionContext> ExecutionContext::copy() const
     copy->variable_environment = variable_environment;
     copy->private_environment = private_environment;
     copy->program_counter = program_counter;
-    copy->yield_continuation = yield_continuation;
-    copy->yield_is_await = yield_is_await;
+    copy->yield_continuation_and_flags = yield_continuation_and_flags;
     copy->this_value = this_value;
     copy->executable = executable;
     copy->passed_argument_count = passed_argument_count;

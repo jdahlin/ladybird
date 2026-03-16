@@ -56,7 +56,7 @@ GC::Ref<GeneratorObject> GeneratorObject::create(Realm& realm, Variant<GC::Ref<E
 
     auto object = realm.create<GeneratorObject>(realm, generating_function_prototype_object, move(execution_context));
     object->m_generating_executable = generating_executable;
-    object->m_yield_continuation = object->m_execution_context->yield_continuation;
+    object->m_yield_continuation = object->m_execution_context->yield_continuation();
     return object;
 }
 
@@ -111,7 +111,7 @@ ThrowCompletionOr<GeneratorObject::IterationResult> GeneratorObject::execute(VM&
     VERIFY(m_yield_continuation.has_value());
 
     // Clear yield state so that a normal return (no yield) is detected as done.
-    m_execution_context->yield_continuation = {};
+    m_execution_context->set_yield_continuation({}, false);
 
     auto result_value = bytecode_interpreter.run_executable(vm.running_execution_context(), *m_generating_executable, m_yield_continuation, completion_cell);
 
@@ -127,7 +127,7 @@ ThrowCompletionOr<GeneratorObject::IterationResult> GeneratorObject::execute(VM&
     if (value.is_special_empty_value())
         value = js_undefined();
 
-    m_yield_continuation = m_execution_context->yield_continuation;
+    m_yield_continuation = m_execution_context->yield_continuation();
     bool done = !m_yield_continuation.has_value();
 
     m_generator_state = done ? GeneratorState::Completed : GeneratorState::SuspendedYield;

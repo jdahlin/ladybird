@@ -45,7 +45,7 @@ AsyncGenerator::AsyncGenerator(Realm& realm, Object* prototype, NonnullOwnPtr<Ex
     : Object(realm, prototype)
     , m_async_generator_context(move(context))
     , m_generating_executable(bytecode_executable)
-    , m_yield_continuation(m_async_generator_context->yield_continuation)
+    , m_yield_continuation(m_async_generator_context->yield_continuation())
 {
 }
 
@@ -173,7 +173,7 @@ void AsyncGenerator::execute(VM& vm, Completion completion)
         VERIFY(m_yield_continuation.has_value());
 
         // Clear yield state so that a normal return (no yield) is detected as done.
-        m_async_generator_context->yield_continuation = {};
+        m_async_generator_context->set_yield_continuation({}, false);
 
         auto result_value = bytecode_interpreter.run_executable(vm.running_execution_context(), m_generating_executable, m_yield_continuation, completion_cell);
 
@@ -195,8 +195,8 @@ void AsyncGenerator::execute(VM& vm, Completion completion)
         if (value.is_special_empty_value())
             value = js_undefined();
 
-        m_yield_continuation = m_async_generator_context->yield_continuation;
-        bool is_await = m_async_generator_context->yield_is_await;
+        m_yield_continuation = m_async_generator_context->yield_continuation();
+        bool is_await = m_async_generator_context->yield_is_await();
 
         if (is_await) {
             auto await_result = this->await(value);
