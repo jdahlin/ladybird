@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<!-- Test: Activating a replaced iframe transition should not crash -->
+<body>
+<script>
+var iframe = document.createElement('iframe');
+iframe.onload = function() {
+    var doc = iframe.contentDocument;
+    doc.startViewTransition(function() {
+        iframe.src = 'about:blank';
+    });
+};
+document.body.appendChild(iframe);
+</script>
+</body>
