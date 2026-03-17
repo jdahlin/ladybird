@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<!-- Test: Transition frames for a removed iframe should not crash -->
+<body>
+<script>
+var iframe = document.createElement('iframe');
+iframe.onload = function() {
+    var doc = iframe.contentDocument;
+    var style = doc.createElement('style');
+    style.textContent = `
+        ::view-transition-group(*) {
+            animation-duration: 10s;
+        }
+    `;
+    doc.head.appendChild(style);
+
+    var target = doc.createElement('div');
+    target.textContent = 'before';
+    target.style.viewTransitionName = 'target';
+    doc.body.appendChild(target);
+
+    var transition = doc.startViewTransition(function() {
+        target.textContent = 'after';
+    });
+    transition.ready.then(function() {
+        iframe.remove();
+    });
+};
+document.body.appendChild(iframe);
+</script>
+</body>

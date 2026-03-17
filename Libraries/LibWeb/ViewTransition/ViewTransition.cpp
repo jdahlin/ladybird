@@ -786,6 +786,10 @@ void ViewTransition::handle_transition_frame()
     }
 
     // 5. If transition’s initial snapshot containing block size is not equal to the snapshot containing block size,
+    if (!document.navigable()) {
+        skip_the_view_transition(WebIDL::InvalidStateError::create(realm, "Document has no navigable"_utf16));
+        return;
+    }
     auto snapshot_containing_block_size = document.navigable()->snapshot_containing_block_size();
     if (m_initial_snapshot_containing_block_size != snapshot_containing_block_size) {
         // then skip the view transition for transition with an "InvalidStateError" DOMException in transition’s relevant Realm,
