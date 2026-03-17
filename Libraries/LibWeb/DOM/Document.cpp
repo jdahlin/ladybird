@@ -7586,8 +7586,13 @@ void Document::view_transition_page_visibility_change_steps()
                 m_active_view_transition->skip_the_view_transition(WebIDL::InvalidStateError::create(realm(), "The document's visibility state is \"hidden\"."_utf16));
             }
         }
-        // 2. Otherwise, assert: active view transition is null.
+        // 2. Otherwise, detached documents may still have a transition queued from before they lost their browsing
+        //    context. Skip it instead of asserting.
         else {
+            if (!browsing_context() && m_active_view_transition) {
+                m_active_view_transition->skip_the_view_transition(WebIDL::InvalidStateError::create(realm(), "The document has no browsing context."_utf16));
+                return;
+            }
             VERIFY(!m_active_view_transition);
         }
     }));

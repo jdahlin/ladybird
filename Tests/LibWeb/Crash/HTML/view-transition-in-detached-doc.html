@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<!-- Test: View transitions on a detached document should not crash -->
+<body>
+<script>
+var iframe = document.createElement('iframe');
+document.body.appendChild(iframe);
+var doc = iframe.contentDocument;
+iframe.remove();
+doc.startViewTransition(function() {});
+</script>
+</body>
