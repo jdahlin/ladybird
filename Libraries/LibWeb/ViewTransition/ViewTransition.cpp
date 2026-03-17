@@ -240,6 +240,8 @@ ErrorOr<void> ViewTransition::capture_the_old_state()
     auto capture_elements = AK::Vector<DOM::Element&>();
 
     // 5. If the snapshot containing block size exceeds an implementation-defined maximum, then return failure.
+    if (!document.navigable())
+        return Error::from_string_literal("Document has no navigable");
     auto snapshot_containing_block = document.navigable()->snapshot_containing_block();
     if (snapshot_containing_block.width() > NumericLimits<int>::max() || snapshot_containing_block.height() > NumericLimits<int>::max())
         return Error::from_string_literal("The snapshot containing block is too large.");

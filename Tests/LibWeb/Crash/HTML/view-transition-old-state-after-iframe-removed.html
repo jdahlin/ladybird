@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<!-- Test: Capturing old state for a removed iframe transition should not crash -->
+<body>
+<script>
+var iframe = document.createElement('iframe');
+iframe.onload = function() {
+    var doc = iframe.contentDocument;
+    doc.startViewTransition(function() {});
+    iframe.remove();
+};
+document.body.appendChild(iframe);
+</script>
+</body>
