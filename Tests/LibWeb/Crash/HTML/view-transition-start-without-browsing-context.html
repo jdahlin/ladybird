@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<!-- Test: Starting a view transition without a browsing context should not crash -->
+<body>
+<script>
+var doc = document.implementation.createHTMLDocument('');
+doc.startViewTransition(function() {});
+</script>
+</body>
