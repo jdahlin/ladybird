@@ -298,6 +298,12 @@ void NavigableContainer::destroy_the_child_navigable()
         return;
     navigable->set_has_been_destroyed();
 
+    // Update the document's visibility state to "hidden" now that it no longer has an active navigable.
+    // Per the Page Visibility spec, a document that is not the active document of a browsing context
+    // should have a visibility state of "hidden". This allows view transitions (and other observers)
+    // to detect the detached state without requiring non-spec null-guard workarounds.
+    navigable->active_document()->update_the_visibility_state(HTML::VisibilityState::Hidden);
+
     // AD-HOC: Clear the navigable's "is delaying load events" flag.
     //         This removes the DocumentLoadEventDelayer on the parent document that was
     //         created when the navigable started loading (navigate algorithm step 15).

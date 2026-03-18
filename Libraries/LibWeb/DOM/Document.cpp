@@ -7512,12 +7512,6 @@ GC::Ptr<ViewTransition::ViewTransition> Document::start_view_transition(GC::Ptr<
     // 3. Let document be this’s relevant global object’s associated document.
     auto& document = as<HTML::Window>(relevant_global_object(*this)).associated_document();
 
-    // Detached documents cannot advance a view transition lifecycle.
-    if (!document.browsing_context()) {
-        transition->skip_the_view_transition(WebIDL::InvalidStateError::create(realm, "Document has no browsing context"_utf16));
-        return transition;
-    }
-
     // 4. If document’s visibility state is "hidden", then skip transition with an "InvalidStateError" DOMException,
     //    and return transition.
     if (m_visibility_state == HTML::VisibilityState::Hidden) {

@@ -168,6 +168,10 @@ void ViewTransition::activate_view_transition()
     // 3. If transition’s initial snapshot containing block size is not equal to the snapshot containing block size, then
     //    skip transition with an "InvalidStateError" DOMException in transition’s relevant Realm, and return.
     auto navigable = document.navigable();
+    // FIXME: Per spec, this should not be null at this point. Documents that navigate away (e.g.
+    //        iframe.src change) during a transition may lose their navigable before activation.
+    //        The root fix is to ensure visibility state is correctly tracked across navigations.
+    //        See: https://github.com/w3c/csswg-drafts/issues/10264
     if (!navigable) {
         skip_the_view_transition(WebIDL::InvalidStateError::create(realm, "Document has no navigable"_utf16));
         return;
@@ -240,6 +244,8 @@ ErrorOr<void> ViewTransition::capture_the_old_state()
     auto capture_elements = AK::Vector<DOM::Element&>();
 
     // 5. If the snapshot containing block size exceeds an implementation-defined maximum, then return failure.
+    // FIXME: Per spec, navigable() should not be null here. Documents navigating away during a transition
+    //        may lose their navigable before capture. See: https://github.com/w3c/csswg-drafts/issues/10264
     if (!document.navigable())
         return Error::from_string_literal("Document has no navigable");
     auto snapshot_containing_block = document.navigable()->snapshot_containing_block();
@@ -786,6 +792,8 @@ void ViewTransition::handle_transition_frame()
     }
 
     // 5. If transition’s initial snapshot containing block size is not equal to the snapshot containing block size,
+    // FIXME: Per spec, navigable() should not be null here. Documents navigating away during a transition
+    //        may lose their navigable mid-frame. See: https://github.com/w3c/csswg-drafts/issues/10264
     if (!document.navigable()) {
         skip_the_view_transition(WebIDL::InvalidStateError::create(realm, "Document has no navigable"_utf16));
         return;
