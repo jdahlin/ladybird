@@ -957,8 +957,8 @@ pub fn generate_statement(
         }
 
         // === DoWhile ===
-        StatementKind::DoWhile { test, body } => {
-            generate_do_while_statement(generator, test, body, preferred_dst)
+        StatementKind::DoWhile(data) => {
+            generate_do_while_statement(generator, &data.test, &data.body, preferred_dst)
         }
 
         // === For ===
@@ -6688,7 +6688,7 @@ fn generate_labelled_statement(
         StatementKind::For { .. }
             | StatementKind::ForInOf { .. }
             | StatementKind::While(_)
-            | StatementKind::DoWhile { .. }
+            | StatementKind::DoWhile(_)
             | StatementKind::Switch(_)
     );
 
