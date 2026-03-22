@@ -454,7 +454,7 @@ impl Parser<'_> {
                     }
                 }
                 (
-                    self.expression(after_string, ExpressionKind::StringLiteral(value)),
+                    self.expression(after_string, ExpressionKind::StringLiteral(Box::new(value))),
                     true,
                 )
             }
@@ -1848,8 +1848,10 @@ impl Parser<'_> {
                     }
                 }
                 let is_proto = value == proto_name;
-                let expression =
-                    self.expression(after_string, ExpressionKind::StringLiteral(value.clone()));
+                let expression = self.expression(
+                    after_string,
+                    ExpressionKind::StringLiteral(Box::new(value.clone())),
+                );
                 PropertyKey {
                     expression,
                     name: Some(value),
@@ -1930,8 +1932,10 @@ impl Parser<'_> {
                     let is_proto = value == proto_name;
                     // C++ uses the object expression start position for identifier-name keys.
                     let key_start = ident_pos_override.unwrap_or(start);
-                    let expression =
-                        self.expression(key_start, ExpressionKind::StringLiteral(value.clone()));
+                    let expression = self.expression(
+                        key_start,
+                        ExpressionKind::StringLiteral(Box::new(value.clone())),
+                    );
                     PropertyKey {
                         expression,
                         name: Some(value),
@@ -1942,8 +1946,10 @@ impl Parser<'_> {
                 } else {
                     self.expected("property key");
                     self.consume();
-                    let expression =
-                        self.expression(start, ExpressionKind::StringLiteral(Utf16String::new()));
+                    let expression = self.expression(
+                        start,
+                        ExpressionKind::StringLiteral(Box::new(Utf16String::new())),
+                    );
                     PropertyKey {
                         expression,
                         name: None,
@@ -2027,8 +2033,10 @@ impl Parser<'_> {
             if is_tagged {
                 raw_strings.push(Utf16String::new());
             }
-            expressions
-                .push(self.expression(start, ExpressionKind::StringLiteral(Utf16String::new())));
+            expressions.push(self.expression(
+                start,
+                ExpressionKind::StringLiteral(Box::new(Utf16String::new())),
+            ));
         }
 
         // For non-tagged templates, we collect parts as expressions (alternating
@@ -2050,9 +2058,10 @@ impl Parser<'_> {
                     let raw_value = raw_template_value(&raw);
                     raw_strings.push(raw_value);
                     match self.process_template_escape_sequences(&raw) {
-                        Some(cooked) => expressions.push(
-                            self.expression(string_pos, ExpressionKind::StringLiteral(cooked)),
-                        ),
+                        Some(cooked) => expressions.push(self.expression(
+                            string_pos,
+                            ExpressionKind::StringLiteral(Box::new(cooked)),
+                        )),
                         // C++ uses rule_start (template literal start) for NullLiteral.
                         None => {
                             expressions.push(self.expression(start, ExpressionKind::NullLiteral));
@@ -2063,8 +2072,9 @@ impl Parser<'_> {
                     if has_octal {
                         self.syntax_error("Octal escape sequence not allowed in template literal");
                     }
-                    expressions
-                        .push(self.expression(string_pos, ExpressionKind::StringLiteral(value)));
+                    expressions.push(
+                        self.expression(string_pos, ExpressionKind::StringLiteral(Box::new(value))),
+                    );
                 }
             } else if self.match_token(TokenType::TemplateLiteralExprStart) {
                 self.consume();
@@ -2073,9 +2083,10 @@ impl Parser<'_> {
                 self.consume_token(TokenType::TemplateLiteralExprEnd);
                 // After an expression, if no template string follows, insert empty.
                 if !self.match_token(TokenType::TemplateLiteralString) {
-                    expressions.push(
-                        self.expression(start, ExpressionKind::StringLiteral(Utf16String::new())),
-                    );
+                    expressions.push(self.expression(
+                        start,
+                        ExpressionKind::StringLiteral(Box::new(Utf16String::new())),
+                    ));
                     if is_tagged {
                         raw_strings.push(Utf16String::new());
                     }
