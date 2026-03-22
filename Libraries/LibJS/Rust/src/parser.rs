@@ -1120,8 +1120,8 @@ impl<'a> Parser<'a> {
         let mut declared_names: HashSet<Utf16String> = HashSet::new();
         for child in children {
             match &child.inner {
-                StatementKind::VariableDeclaration { declarations, .. } => {
-                    for decl in declarations {
+                StatementKind::VariableDeclaration(vd) => {
+                    for decl in &vd.declarations {
                         collect_binding_names(&decl.target, &mut declared_names);
                     }
                 }
@@ -1143,8 +1143,8 @@ impl<'a> Parser<'a> {
                 StatementKind::Export(data) => {
                     if let Some(ref statement) = data.statement {
                         match &statement.inner {
-                            StatementKind::VariableDeclaration { declarations, .. } => {
-                                for decl in declarations {
+                            StatementKind::VariableDeclaration(vd) => {
+                                for decl in &vd.declarations {
                                     collect_binding_names(&decl.target, &mut declared_names);
                                 }
                             }
