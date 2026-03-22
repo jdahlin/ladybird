@@ -1063,11 +1063,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Update {
+                        ExpressionKind::Update(Box::new(UpdateExprData {
                             op: UpdateOp::Increment,
                             argument: Box::new(lhs),
                             prefixed: false,
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -1083,11 +1083,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Update {
+                        ExpressionKind::Update(Box::new(UpdateExprData {
                             op: UpdateOp::Decrement,
                             argument: Box::new(lhs),
                             prefixed: false,
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -1120,11 +1120,11 @@ impl Parser<'_> {
                 }
                 self.expression(
                     start,
-                    ExpressionKind::Update {
+                    ExpressionKind::Update(Box::new(UpdateExprData {
                         op: UpdateOp::Increment,
                         argument: Box::new(expression),
                         prefixed: true,
-                    },
+                    })),
                 )
             }
             TokenType::MinusMinus => {
@@ -1142,11 +1142,11 @@ impl Parser<'_> {
                 }
                 self.expression(
                     start,
-                    ExpressionKind::Update {
+                    ExpressionKind::Update(Box::new(UpdateExprData {
                         op: UpdateOp::Decrement,
                         argument: Box::new(expression),
                         prefixed: true,
-                    },
+                    })),
                 )
             }
             TokenType::ExclamationMark
