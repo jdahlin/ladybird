@@ -1083,12 +1083,14 @@ pub fn generate_statement(
         }
 
         // === ForIn / ForOf / ForAwaitOf ===
-        StatementKind::ForInOf {
-            kind,
-            lhs,
-            rhs,
-            body,
-        } => generate_for_in_of_statement(generator, *kind, lhs, rhs, body, preferred_dst),
+        StatementKind::ForInOf(data) => generate_for_in_of_statement(
+            generator,
+            data.kind,
+            &data.lhs,
+            &data.rhs,
+            &data.body,
+            preferred_dst,
+        ),
 
         // === UsingDeclaration ===
         StatementKind::UsingDeclaration { .. } => {
@@ -6681,7 +6683,7 @@ fn generate_labelled_statement(
     let is_iteration_or_switch = matches!(
         &effective_inner.inner,
         StatementKind::For(_)
-            | StatementKind::ForInOf { .. }
+            | StatementKind::ForInOf(_)
             | StatementKind::While(_)
             | StatementKind::DoWhile(_)
             | StatementKind::Switch(_)
@@ -8490,7 +8492,7 @@ pub fn emit_function_declaration_instantiation(
 fn is_for_loop(statement: &Statement) -> bool {
     matches!(
         statement.inner,
-        StatementKind::For(_) | StatementKind::ForInOf { .. }
+        StatementKind::For(_) | StatementKind::ForInOf(_)
     )
 }
 
