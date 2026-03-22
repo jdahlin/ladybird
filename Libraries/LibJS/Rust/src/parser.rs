@@ -1018,12 +1018,12 @@ impl<'a> Parser<'a> {
             self.scope_collector.close_scope();
             self.statement(
                 start,
-                StatementKind::Program(ProgramData {
+                StatementKind::Program(Box::new(ProgramData {
                     scope,
                     program_type: ProgramType::Script,
                     is_strict_mode: is_strict,
                     has_top_level_await: false,
-                }),
+                })),
             )
         } else {
             let (children, has_top_level_await) = self.parse_module();
@@ -1032,12 +1032,12 @@ impl<'a> Parser<'a> {
             self.scope_collector.close_scope();
             self.statement(
                 start,
-                StatementKind::Program(ProgramData {
+                StatementKind::Program(Box::new(ProgramData {
                     scope,
                     program_type: ProgramType::Module,
                     is_strict_mode: true,
                     has_top_level_await,
-                }),
+                })),
             )
         }
     }
