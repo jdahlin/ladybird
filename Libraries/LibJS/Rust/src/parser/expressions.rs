@@ -756,11 +756,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Binary {
+                        ExpressionKind::Binary(Box::new(BinaryExprData {
                             op,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -784,11 +784,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Binary {
+                        ExpressionKind::Binary(Box::new(BinaryExprData {
                             op: BinaryOp::In,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
