@@ -2090,10 +2090,10 @@ impl Parser<'_> {
 
         self.expression(
             start,
-            ExpressionKind::TemplateLiteral(TemplateLiteralData {
+            ExpressionKind::TemplateLiteral(Box::new(TemplateLiteralData {
                 expressions,
                 raw_strings,
-            }),
+            })),
         )
     }
 
