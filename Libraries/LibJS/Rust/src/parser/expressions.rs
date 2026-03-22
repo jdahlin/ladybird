@@ -942,11 +942,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Conditional {
+                        ExpressionKind::Conditional(Box::new(ConditionalExprData {
                             test: Box::new(lhs),
                             consequent: Box::new(consequent),
                             alternate: Box::new(alternate),
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
