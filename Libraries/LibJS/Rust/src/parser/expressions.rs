@@ -969,11 +969,11 @@ impl Parser<'_> {
                     (
                         self.expression(
                             start,
-                            ExpressionKind::Member {
+                            ExpressionKind::Member(Box::new(MemberExprData {
                                 object: Box::new(lhs),
                                 property: Box::new(property),
                                 computed: false,
-                            },
+                            })),
                         ),
                         ForbiddenTokens::none(),
                     )
@@ -988,11 +988,11 @@ impl Parser<'_> {
                     (
                         self.expression(
                             start,
-                            ExpressionKind::Member {
+                            ExpressionKind::Member(Box::new(MemberExprData {
                                 object: Box::new(lhs),
                                 property: Box::new(property),
                                 computed: false,
-                            },
+                            })),
                         ),
                         ForbiddenTokens::none(),
                     )
@@ -1010,11 +1010,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Member {
+                        ExpressionKind::Member(Box::new(MemberExprData {
                             object: Box::new(lhs),
                             property: Box::new(property),
                             computed: true,
-                        },
+                        })),
                     ),
                     ForbiddenTokens::none(),
                 )
@@ -1197,8 +1197,8 @@ impl Parser<'_> {
                         rhs_start.column,
                     );
                 }
-                if let ExpressionKind::Member { property, .. } = &expression.inner
-                    && matches!(property.inner, ExpressionKind::PrivateIdentifier(_))
+                if let ExpressionKind::Member(ref data) = expression.inner
+                    && matches!(data.property.inner, ExpressionKind::PrivateIdentifier(_))
                 {
                     self.syntax_error("Private fields cannot be deleted");
                 }
