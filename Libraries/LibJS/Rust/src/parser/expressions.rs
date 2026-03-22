@@ -806,11 +806,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Logical {
+                        ExpressionKind::Logical(Box::new(LogicalExprData {
                             op: LogicalOp::And,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     new_forbidden,
                 )
@@ -822,11 +822,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Logical {
+                        ExpressionKind::Logical(Box::new(LogicalExprData {
                             op: LogicalOp::Or,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     new_forbidden,
                 )
@@ -839,11 +839,11 @@ impl Parser<'_> {
                 (
                     self.expression(
                         start,
-                        ExpressionKind::Logical {
+                        ExpressionKind::Logical(Box::new(LogicalExprData {
                             op: LogicalOp::NullishCoalescing,
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
-                        },
+                        })),
                     ),
                     new_forbidden,
                 )
