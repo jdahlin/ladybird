@@ -2091,8 +2091,8 @@ fn for_each_child_statement(
         StatementKind::DoWhile(data) => {
             f(&data.body.inner);
         }
-        StatementKind::With { body, .. } => {
-            f(&body.inner);
+        StatementKind::With(data) => {
+            f(&data.body.inner);
         }
         StatementKind::For(data) => {
             if let Some(ast::ForInit::Declaration(decl)) = &data.init {
