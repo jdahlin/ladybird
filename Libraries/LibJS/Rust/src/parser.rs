@@ -55,9 +55,10 @@
 //!    body for bytecode generation, `materialize_lazy_body` creates a
 //!    fresh parser at the saved offset and fully parses the body.
 //!
-//! Inside a `SYNTAX_ONLY` parser, doubly-nested function bodies are
-//! skipped via brace-counting (no recursive syntax checker), with special
-//! handling for template literals and private identifiers.
+//! Inside a `SYNTAX_ONLY` parser, `should_lazy_parse()` always returns
+//! false, so nested function bodies are fully parsed (still without
+//! building real AST nodes).  This ensures syntax errors at any nesting
+//! depth are caught at parse time, matching V8/JSC behavior.
 //!
 //! ## Backtracking
 //!
@@ -72,9 +73,9 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ast::{
-    BindingPattern, CompiledRegex, Expression, ExpressionClass, ExpressionKind, FunctionParameter,
-    FunctionTable, Identifier, PrivateIdentifier, ProgramData, ScopeData, SourceRange, Statement,
-    StatementKind, Utf16String,
+    BindingPattern, Expression, ExpressionClass, ExpressionKind, FunctionParameter, FunctionTable,
+    Identifier, PrivateIdentifier, ProgramData, ScopeData, SourceRange, Statement, StatementKind,
+    Utf16String,
 };
 use crate::lexer::{Lexer, ch};
 use crate::scope_collector::{ScopeCollector, ScopeCollectorState};
@@ -246,22 +247,12 @@ pub(crate) struct ParserFlags {
     pub in_with_statement: bool,
 }
 
-/// A regex literal whose compilation is deferred until after parsing.
-pub struct DeferredRegex {
-    pub compiled_regex: Rc<CompiledRegex>,
-    pub pattern: Vec<u16>,
-    pub flags: Vec<u16>,
-    pub line: u32,
-    pub column: u32,
-}
-
 /// Snapshot of parser state for speculative parsing (backtracking).
 struct SavedState {
     token: Token,
     errors_len: usize,
     flags: ParserFlags,
     scope_collector_state: ScopeCollectorState,
-    deferred_regexes_len: usize,
 }
 
 /// The main JavaScript parser.
@@ -350,8 +341,6 @@ pub struct Parser<'a, const SYNTAX_ONLY: bool = false> {
     /// re-attempt inner positions during grouping expression re-parse.
     arrow_function_failed_positions: HashSet<usize>,
 
-    /// Regex literals whose compilation is deferred until after parsing.
-    deferred_regexes: Vec<DeferredRegex>,
     pub(crate) function_nesting_depth: u32,
     /// When true, all function bodies are eagerly parsed (e.g. for AST dumping).
     pub disable_lazy_parsing: bool,
@@ -400,7 +389,6 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
             exported_names: HashSet::new(),
             function_table: FunctionTable::new(),
             arrow_function_failed_positions: HashSet::new(),
-            deferred_regexes: Vec::new(),
             function_nesting_depth,
             disable_lazy_parsing: false,
         }
@@ -483,6 +471,7 @@ impl<'a> Parser<'a, true> {
                 in_function_context: true,
                 in_generator_function_context: is_generator,
                 await_expression_is_valid: is_async,
+                new_target_is_valid: true,
                 ..ParserFlags::default()
             },
             ScopeCollector::new_free_var_only(),
@@ -493,7 +482,8 @@ impl<'a> Parser<'a, true> {
 
 impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
     pub(crate) fn should_lazy_parse(&self) -> bool {
-        self.function_nesting_depth > 0
+        !SYNTAX_ONLY
+            && self.function_nesting_depth > 0
             && !self.flags.in_with_statement
             && !self.disable_lazy_parsing
     }
@@ -849,11 +839,6 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
     }
 
     /// Take the deferred regex literals collected during parsing.
-    /// The caller is responsible for compiling them (on the main thread).
-    pub(crate) fn take_deferred_regexes(&mut self) -> Vec<DeferredRegex> {
-        std::mem::take(&mut self.deferred_regexes)
-    }
-
     pub(crate) fn validate_regex_flags(&mut self, flags: &[u16]) {
         let valid_flags: &[u16] = &[
             ch(b'd'),
@@ -913,7 +898,6 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
             errors_len: self.errors.len(),
             flags: self.flags,
             scope_collector_state: self.scope_collector.save_state(),
-            deferred_regexes_len: self.deferred_regexes.len(),
         });
     }
 
@@ -921,7 +905,6 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
         let state = self.saved_states.pop().expect("No saved state to restore");
         self.current_token = state.token;
         self.errors.truncate(state.errors_len);
-        self.deferred_regexes.truncate(state.deferred_regexes_len);
         self.flags = state.flags;
         self.scope_collector.load_state(state.scope_collector_state);
         self.lexer.load_state();
@@ -1525,25 +1508,6 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
 }
 
 // === Helpers ===
-
-/// Batch-compile deferred regex literals.  Free function so it can be
-/// called without specifying the SYNTAX_ONLY const generic.
-pub(crate) fn compile_deferred_regexes(deferred: Vec<DeferredRegex>) -> Vec<ParseError> {
-    let mut errors = Vec::new();
-    for d in deferred {
-        match crate::bytecode::ffi::compile_regex(&d.pattern, &d.flags) {
-            Ok(handle) => d.compiled_regex.set(handle),
-            Err(msg) => {
-                errors.push(ParseError {
-                    message: msg,
-                    line: d.line,
-                    column: d.column,
-                });
-            }
-        }
-    }
-    errors
-}
 
 pub(crate) fn is_use_strict(raw: &[u16]) -> bool {
     raw == utf16!("'use strict'") || raw == utf16!("\"use strict\"")

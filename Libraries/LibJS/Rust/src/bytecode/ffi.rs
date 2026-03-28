@@ -273,6 +273,16 @@ unsafe extern "C" {
         error_out: *mut *const std::os::raw::c_char,
     ) -> *mut c_void;
 
+    /// Validate a regex for syntax errors only; does not compile. Returns a
+    /// malloc'd error string on failure (caller must free with rust_free_error_string),
+    /// or null on success.
+    pub fn rust_validate_regex(
+        pattern_data: *const u16,
+        pattern_len: usize,
+        flags_data: *const u16,
+        flags_len: usize,
+    ) -> *const std::os::raw::c_char;
+
     pub fn rust_free_error_string(str: *const std::os::raw::c_char);
 
     pub fn rust_number_to_utf16(value: f64, buffer: *mut u16, buffer_len: usize) -> usize;
@@ -585,6 +595,28 @@ pub fn js_number_to_utf16(value: f64) -> Utf16String {
     let mut buffer = [0u16; 64];
     let len = unsafe { rust_number_to_utf16(value, buffer.as_mut_ptr(), buffer.len()) };
     Utf16String(buffer[..len].to_vec())
+}
+
+/// Validate a regex pattern+flags for syntax errors only (no compilation).
+/// Used in SYNTAX_ONLY parser mode to catch regex syntax errors cheaply.
+pub fn validate_regex(pattern: &[u16], flags: &[u16]) -> Result<(), String> {
+    unsafe {
+        let error = rust_validate_regex(
+            pattern.as_ptr(),
+            pattern.len(),
+            flags.as_ptr(),
+            flags.len(),
+        );
+        if error.is_null() {
+            Ok(())
+        } else {
+            let msg = std::ffi::CStr::from_ptr(error)
+                .to_string_lossy()
+                .into_owned();
+            rust_free_error_string(error);
+            Err(msg)
+        }
+    }
 }
 
 /// Compile a regex pattern+flags using the C++ regex engine.

@@ -713,6 +713,13 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
             Vec::new()
         };
         self.validate_regex_flags(&flags);
+        if SYNTAX_ONLY {
+            // Validate syntax only — no compilation, no AST allocation.
+            if let Err(msg) = crate::bytecode::ffi::validate_regex(&pattern, &flags) {
+                self.syntax_error_at_position(&msg, start);
+            }
+            return self.syntax_only(start, ExpressionClass::Other);
+        }
         let compiled_regex = match crate::bytecode::ffi::compile_regex(&pattern, &flags) {
             Ok(handle) => Rc::new(CompiledRegex::new(handle)),
             Err(msg) => {

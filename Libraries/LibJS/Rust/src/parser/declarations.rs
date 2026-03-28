@@ -1268,19 +1268,14 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
     /// Lazy-parse a function body.  Returns `FunctionBodyKind::Lazy` with
     /// the source position and flags needed for later materialization.
     ///
-    /// In normal mode, spawns a `Parser<true>` syntax checker that validates
-    /// syntax, collects free variables, and propagates `this`/`eval`/private-name
-    /// usage back to the outer parser.  In syntax-check mode, delegates to
-    /// `skip_function_body_brace_counting` instead.
+    /// Spawns a `Parser<true>` syntax checker that validates syntax, collects
+    /// free variables, and propagates `this`/`eval`/private-name usage back
+    /// to the outer parser.
     pub(crate) fn parse_function_body_lazy(
         &mut self,
         is_async: bool,
         is_generator: bool,
     ) -> (FunctionBodyKind, bool, FunctionParsingInsights) {
-        if SYNTAX_ONLY {
-            return self.skip_function_body_brace_counting();
-        }
-
         // Spawn syntax-check parser.
         self.consume();
         let body_start_offset = self.current_token.offset;
@@ -1380,104 +1375,6 @@ impl<'a, const SYNTAX_ONLY: bool> Parser<'a, SYNTAX_ONLY> {
         (FunctionBodyKind::Lazy(lazy), has_use_strict, insights)
     }
 
-    /// Skip a function body by counting braces (SYNTAX_ONLY mode only).
-    /// Tracks `this`, `eval`, identifiers, and private names via token
-    /// scanning, but does not validate syntax.  Used for doubly-nested
-    /// bodies where spawning another syntax checker would produce
-    /// mismatched line numbers.
-    fn skip_function_body_brace_counting(
-        &mut self,
-    ) -> (FunctionBodyKind, bool, FunctionParsingInsights) {
-        let mut depth: u32 = 1;
-        let mut saw_this = false;
-        let mut has_use_strict = false;
-        let mut body_start_offset = 0u32;
-        let mut body_start_line = 0u32;
-        let mut body_start_column = 0u32;
-        let mut is_first_token = true;
-        loop {
-            self.consume();
-            if is_first_token {
-                is_first_token = false;
-                body_start_offset = self.current_token.offset;
-                body_start_line = self.current_token.line_number;
-                body_start_column = self.current_token.line_column;
-                if self.current_token_type() == TokenType::StringLiteral {
-                    let val = self.token_original_value(&self.current_token);
-                    if crate::parser::is_use_strict(val) {
-                        has_use_strict = true;
-                    }
-                }
-            }
-            match self.current_token_type() {
-                TokenType::CurlyOpen => depth += 1,
-                TokenType::CurlyClose => {
-                    depth -= 1;
-                    if depth == 0 {
-                        self.consume();
-                        break;
-                    }
-                }
-                // Skip over template literals so that `}` inside
-                // template expressions (e.g. `${fn() { ... }()}`)
-                // is not counted as a closing brace.
-                TokenType::TemplateLiteralStart => {
-                    let mut tmpl_depth: u32 = 0;
-                    loop {
-                        self.consume();
-                        match self.current_token_type() {
-                            TokenType::TemplateLiteralExprStart => tmpl_depth += 1,
-                            TokenType::TemplateLiteralExprEnd => tmpl_depth -= 1,
-                            TokenType::TemplateLiteralEnd if tmpl_depth == 0 => break,
-                            TokenType::Eof => break,
-                            _ => {}
-                        }
-                    }
-                }
-                TokenType::This => saw_this = true,
-                // Register private identifiers so that the class
-                // validation doesn't report them as undeclared.
-                TokenType::PrivateIdentifier => {
-                    let value = self.token_value(&self.current_token).to_vec();
-                    self.register_referenced_private_name(&value);
-                }
-                // Collect identifier tokens for free variable tracking.
-                // These come from brace-counted (doubly-nested) function
-                // bodies where full scope analysis isn't available.
-                TokenType::Identifier => {
-                    let value = self.token_value(&self.current_token).to_vec();
-                    // Conservatively treat any use of `eval` as a
-                    // potential direct eval call.  We can't distinguish
-                    // `eval(...)` from `obj.eval` in brace-counting, but
-                    // false positives are harmless (just less optimized).
-                    if value == utf16!("eval") {
-                        self.scope_collector.set_contains_direct_call_to_eval();
-                        self.scope_collector.set_uses_this();
-                    }
-                    self.scope_collector
-                        .use_identifier_in_free_var_tracking(&value);
-                }
-                TokenType::Eof => break,
-                _ => {}
-            }
-        }
-        if saw_this {
-            self.scope_collector.set_uses_this();
-        }
-        let insights = FunctionParsingInsights {
-            uses_this: self.scope_collector.uses_this(),
-            uses_this_from_environment: self.scope_collector.uses_this_from_environment(),
-            contains_direct_call_to_eval: self.scope_collector.contains_direct_call_to_eval(),
-            might_need_arguments_object: self.flags.function_might_need_arguments_object,
-        };
-        let lazy = LazyFunctionBody {
-            body_start_offset,
-            body_start_line,
-            body_start_column,
-            has_use_strict,
-        };
-        (FunctionBodyKind::Lazy(lazy), has_use_strict, insights)
-    }
 
     // https://tc39.es/ecma262/#sec-function-definitions
     // FormalParameters : [empty]

@@ -1083,6 +1083,33 @@ extern "C" void rust_free_compiled_regex(void* ptr)
     delete static_cast<RustCompiledRegex*>(ptr);
 }
 
+extern "C" char const* rust_validate_regex(uint16_t const*, size_t, uint16_t const*, size_t);
+extern "C" char const* rust_validate_regex(
+    uint16_t const* pattern_data, size_t pattern_len,
+    uint16_t const* flags_data, size_t flags_len)
+{
+    auto pattern = Utf16View { reinterpret_cast<char16_t const*>(pattern_data), pattern_len };
+    auto flags_view = Utf16View { reinterpret_cast<char16_t const*>(flags_data), flags_len };
+    bool is_unicode = false;
+    bool is_unicode_sets = false;
+    for (size_t i = 0; i < flags_view.length_in_code_units(); ++i) {
+        auto ch = flags_view.code_unit_at(i);
+        if (ch == 'u')
+            is_unicode = true;
+        else if (ch == 'v')
+            is_unicode_sets = true;
+    }
+    auto result = JS::parse_regex_pattern(pattern, is_unicode, is_unicode_sets);
+    if (result.is_error()) {
+        auto msg = MUST(String::formatted("Invalid regular expression: {}", result.release_error().error));
+        auto* buf = static_cast<char*>(malloc(msg.byte_count() + 1));
+        memcpy(buf, msg.bytes().data(), msg.byte_count());
+        buf[msg.byte_count()] = '\0';
+        return buf;
+    }
+    return nullptr;
+}
+
 extern "C" void rust_free_error_string(char const* str)
 {
     free(const_cast<char*>(str));
