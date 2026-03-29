@@ -65,6 +65,12 @@ if (ENABLE_QT AND ENABLE_GUI_TARGETS)
     find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
 endif()
 
+if (ENABLE_GTK AND ENABLE_GUI_TARGETS)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4)
+    pkg_check_modules(LIBADWAITA REQUIRED IMPORTED_TARGET libadwaita-1>=1.4)
+endif()
+
 # We need to find OpenSSL in order to link it explicitly with all targets.
 find_package(OpenSSL REQUIRED)
 

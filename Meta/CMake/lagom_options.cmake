@@ -30,3 +30,5 @@ if (ANDROID OR APPLE)
 else()
     ladybird_option(ENABLE_QT ON CACHE BOOL "Build ladybird application using Qt GUI")
 endif()
+
+ladybird_option(ENABLE_GTK OFF CACHE BOOL "Build ladybird application using GTK4/libadwaita GUI")

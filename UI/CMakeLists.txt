@@ -49,6 +49,8 @@ endfunction()
 # Select UI Framework
 if (ENABLE_QT)
    add_subdirectory(Qt)
+elseif (ENABLE_GTK)
+   add_subdirectory(Gtk)
 elseif (APPLE)
    add_subdirectory(AppKit)
 elseif(ANDROID)
