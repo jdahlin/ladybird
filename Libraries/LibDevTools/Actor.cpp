@@ -74,6 +74,34 @@ void Actor::send_message(JsonObject message)
     m_pending_responses.empend(OptionalNone {}, move(message));
 }
 
+void Actor::send_bulk_data(Message const& message, StringView type, ReadonlyBytes data)
+{
+    auto& connection = devtools().connection();
+    if (!connection)
+        return;
+
+    // Remove the pending response entry for this message since bulk
+    // responses bypass the JSON response queue.
+    for (size_t i = 0; i < m_pending_responses.size(); ++i) {
+        if (m_pending_responses[i].id == message.id) {
+            m_pending_responses.remove(i);
+            break;
+        }
+    }
+
+    // Flush any queued JSON responses that were waiting before this one.
+    size_t number_of_sent_messages = 0;
+    for (auto const& pending_response : m_pending_responses) {
+        if (!pending_response.response.has_value())
+            break;
+        connection->send_message(*pending_response.response);
+        ++number_of_sent_messages;
+    }
+    m_pending_responses.remove(0, number_of_sent_messages);
+
+    connection->send_bulk_data(name(), type, data);
+}
+
 // https://firefox-source-docs.mozilla.org/devtools/backend/protocol.html#error-packets
 void Actor::send_missing_parameter_error(Optional<Message const&> message, StringView parameter)
 {

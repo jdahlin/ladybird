@@ -21,6 +21,7 @@
 #include <AK/TemporaryChange.h>
 #include <AK/Time.h>
 #include <AK/Utf8View.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibCore/Timer.h>
 #include <LibGC/RootVector.h>
 #include <LibHTTP/Cookie/Cookie.h>
@@ -491,6 +492,8 @@ GC::Ref<Document> Document::construct_impl(JS::Realm& realm)
 
 GC::Ref<Document> Document::create(JS::Realm& realm, URL::URL const& url)
 {
+    MARKER_INSTANT("Document::create"sv, "Text"sv, Core::MarkerCategory::DOM,
+        { { "name"sv, url.to_string() } });
     return realm.create<Document>(realm, url);
 }
 
@@ -1488,6 +1491,11 @@ void Document::update_layout(UpdateLayoutReason reason)
     ScopeGuard guard = [&] { m_is_running_update_layout = false; };
     m_is_running_update_layout = true;
 
+    // MARKER_SCOPE pushes a "Layout" frame onto the marker scope stack so EVERY
+    // sample taken inside this function attributes time to Layout in the call
+    // tree. The destructor pops and emits an interval marker for the chart.
+    MARKER_SCOPE("Layout"sv, "Layout"sv, Core::MarkerCategory::Layout);
+
     update_style();
 
     if (layout_is_up_to_date())
@@ -1527,6 +1535,7 @@ void Document::update_layout(UpdateLayoutReason reason)
     auto timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
 
     if (needs_layout_tree_rebuild) {
+        MARKER_SCOPE("Build layout tree"sv, "Layout"sv, Core::MarkerCategory::Layout);
         Layout::TreeBuilder tree_builder;
         m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
 
@@ -1594,6 +1603,7 @@ void Document::update_layout(UpdateLayoutReason reason)
             Layout::AvailableSize::make_definite(viewport_rect.width()),
             Layout::AvailableSize::make_definite(viewport_rect.height()));
 
+        MARKER_SCOPE("Run formatting context"sv, "Layout"sv, Core::MarkerCategory::Layout);
         if (m_layout_root->first_child() && m_layout_root->first_child()->is_svg_svg_box()) {
             // NOTE: If we are laying out a standalone SVG document, we give it some special treatment:
             //       The root <svg> container gets the same size as the viewport,
@@ -1774,8 +1784,13 @@ void Document::update_style()
     // style change event. [CSS-Transitions-2]
     m_transition_generation++;
 
+    // MARKER_SCOPE pushes a "Style" frame so samples attribute time to Style
+    // in the call tree, and emits the interval marker on destruction.
+    MARKER_SCOPE("Recalculate Style"sv, "Style"sv, Core::MarkerCategory::Style);
+
     if (m_needs_invalidation_of_elements_affected_by_has) {
         m_needs_invalidation_of_elements_affected_by_has = false;
+        MARKER_SCOPE(":has() invalidation"sv, "Style"sv, Core::MarkerCategory::Style);
         style_scope().invalidate_style_of_elements_affected_by_has();
         for_each_shadow_root([&](auto& shadow_root) {
             shadow_root.style_scope().invalidate_style_of_elements_affected_by_has();
@@ -1785,7 +1800,10 @@ void Document::update_style()
     if (!m_style_invalidator->has_pending_invalidations() && !needs_full_style_update() && !needs_style_update() && !child_needs_style_update())
         return;
 
-    m_style_invalidator->invalidate(*this);
+    {
+        MARKER_SCOPE("Style invalidation"sv, "Style"sv, Core::MarkerCategory::Style);
+        m_style_invalidator->invalidate(*this);
+    }
 
     // NOTE: If this is a document hosting <template> contents, style update is unnecessary.
     if (m_created_for_appropriate_template_contents)
@@ -1794,22 +1812,29 @@ void Document::update_style()
     // Fetch the viewport rect once, instead of repeatedly, during style computation.
     style_computer().set_viewport_rect({}, viewport_rect());
 
-    evaluate_media_rules();
+    {
+        MARKER_SCOPE("Evaluate media rules"sv, "Style"sv, Core::MarkerCategory::Style);
+        evaluate_media_rules();
+    }
 
     style_computer().reset_has_result_cache();
     style_computer().reset_ancestor_filter();
 
     build_registered_properties_cache();
 
-    auto invalidation = update_style_recursively(*this, style_computer(), false, false, false);
-    if (!invalidation.is_none())
-        invalidate_display_list();
+    {
+        MARKER_SCOPE("Recompute styles"sv, "Style"sv, Core::MarkerCategory::Style);
+        auto invalidation = update_style_recursively(*this, style_computer(), false, false, false);
 
-    if (invalidation.rebuild_accumulated_visual_contexts)
-        set_needs_accumulated_visual_contexts_update(true);
+        if (!invalidation.is_none())
+            invalidate_display_list();
 
-    if (invalidation.rebuild_stacking_context_tree)
-        invalidate_stacking_context_tree();
+        if (invalidation.rebuild_accumulated_visual_contexts)
+            set_needs_accumulated_visual_contexts_update(true);
+
+        if (invalidation.rebuild_stacking_context_tree)
+            invalidate_stacking_context_tree();
+    }
     m_needs_full_style_update = false;
 }
 
@@ -3344,6 +3369,21 @@ void Document::update_readiness(HTML::DocumentReadyState readiness_value)
 
     // 2. Set document's current document readiness to readinessValue.
     m_readiness = readiness_value;
+
+    StringView readiness_marker_name;
+    switch (readiness_value) {
+    case HTML::DocumentReadyState::Loading:
+        readiness_marker_name = "Navigation::DOMLoading"sv;
+        break;
+    case HTML::DocumentReadyState::Interactive:
+        readiness_marker_name = "Navigation::DOMInteractive"sv;
+        break;
+    case HTML::DocumentReadyState::Complete:
+        readiness_marker_name = "Navigation::DOMComplete"sv;
+        break;
+    }
+    MARKER_INSTANT(readiness_marker_name, "Text"sv, Core::MarkerCategory::DOM,
+        { { "name"sv, url().to_string() } });
 
     // 3. If document is associated with an HTML parser, then:
     if (m_parser) {
@@ -5246,7 +5286,11 @@ void Document::queue_intersection_observer_task()
 
             // 5. Invoke callback with queue as the first argument, observer as the second argument, and observer as the callback this value. If this throws an exception, report the exception.
             // NOTE: This does not follow the spec as written precisely, but this is the same thing we do elsewhere and there is a WPT test that relies on this.
+            MARKER_START_TIME(io_marker_start);
             (void)WebIDL::invoke_callback(callback, observer.ptr(), WebIDL::ExceptionBehavior::Report, { { wrapped_queue, observer.ptr() } });
+            MARKER_INTERVAL("IntersectionObserver callback"sv, "Text"sv,
+                Core::MarkerCategory::DOM, io_marker_start,
+                { { "name"sv, MUST(String::formatted("{} entries", queue.size())) } });
         }
     }));
 }
@@ -5977,8 +6021,30 @@ void Document::update_animations_and_send_events(double timestamp)
 
     // 7. Dispatch each of the events in events to dispatch at their corresponding target using the order established in
     //    the previous step.
-    for (auto const& event : events_to_dispatch)
+    for (auto const& event : events_to_dispatch) {
+        if (is<CSS::AnimationEvent>(*event.event)) {
+            auto const& ae = as<CSS::AnimationEvent>(*event.event);
+            MARKER_INSTANT(
+                event.event->type().to_string(),
+                "CSSAnimation"sv, Core::MarkerCategory::Layout,
+                {
+                    { "animationName"sv, ae.animation_name().to_string() },
+                    { "eventType"sv, event.event->type().to_string() },
+                    { "elapsedTime"sv, ae.elapsed_time() },
+                });
+        } else if (is<CSS::TransitionEvent>(*event.event)) {
+            auto const& te = as<CSS::TransitionEvent>(*event.event);
+            MARKER_INSTANT(
+                event.event->type().to_string(),
+                "CSSTransition"sv, Core::MarkerCategory::Layout,
+                {
+                    { "propertyName"sv, String { te.property_name() } },
+                    { "eventType"sv, event.event->type().to_string() },
+                    { "elapsedTime"sv, te.elapsed_time() },
+                });
+        }
         event.target->dispatch_event(event.event);
+    }
 }
 
 // https://www.w3.org/TR/web-animations-1/#remove-replaced-animations
@@ -6584,7 +6650,11 @@ size_t Document::broadcast_active_resize_observations()
         }
 
         // 4. Invoke observer.[[callback]] with entries.
+        MARKER_START_TIME(ro_marker_start);
         observer->invoke_callback(entries);
+        MARKER_INTERVAL("ResizeObserver callback"sv, "Text"sv,
+            Core::MarkerCategory::Layout, ro_marker_start,
+            { { "name"sv, MUST(String::formatted("{} entries", entries.size())) } });
 
         // 5. Clear observer.[[activeTargets]].
         observer->active_targets().clear();
@@ -7428,6 +7498,8 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
 {
     if (m_cached_display_list && m_cached_display_list_paint_config == config)
         return m_cached_display_list;
+
+    MARKER_SCOPE("Paint"sv, "Paint"sv, Core::MarkerCategory::Paint);
 
     update_paint_and_hit_testing_properties_if_needed();
     VERIFY(paintable());

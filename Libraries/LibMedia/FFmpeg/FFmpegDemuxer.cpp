@@ -7,8 +7,10 @@
 
 #include <AK/Math.h>
 #include <AK/MemoryStream.h>
+#include <AK/ScopeGuard.h>
 #include <AK/Stream.h>
 #include <AK/Time.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibMedia/FFmpeg/FFmpegDemuxer.h>
 #include <LibMedia/FFmpeg/FFmpegHelpers.h>
 #include <LibMedia/MediaStream.h>
@@ -293,6 +295,13 @@ DecoderErrorOr<ReadonlyBytes> FFmpegDemuxer::get_codec_initialization_data_for_t
 
 DecoderErrorOr<CodedFrame> FFmpegDemuxer::get_next_sample_for_track(Track const& track)
 {
+    MARKER_START_TIME(demux_marker_start);
+    ScopeGuard add_demux_marker = [&] {
+        MARKER_INTERVAL("Demux"sv, "Text"sv, Core::MarkerCategory::Media,
+            demux_marker_start,
+            { { "name"sv, track.type() == TrackType::Video ? "video"sv : "audio"sv } });
+    };
+
     auto& track_context = get_track_context(track);
     auto& format_context = *track_context.format_context;
     auto& packet = *track_context.packet;

@@ -118,6 +118,10 @@ public:
 
     virtual void did_connect_devtools_client(TabDescription const&) const { }
     virtual void did_disconnect_devtools_client(TabDescription const&) const { }
+
+    using OnProfilingComplete = Function<void(ErrorOr<String>)>;
+    virtual void start_profiling(TabDescription const&, u32) const { }
+    virtual void stop_profiling(TabDescription const&, OnProfilingComplete) const { }
 };
 
 }

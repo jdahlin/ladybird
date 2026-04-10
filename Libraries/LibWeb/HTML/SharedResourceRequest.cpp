@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/MarkerCollector.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ImmutableBitmap.h>
 #include <LibWeb/Bindings/PrincipalHostDefined.h>
@@ -161,7 +162,17 @@ void SharedResourceRequest::handle_successful_fetch(URL::URL const& url_string, 
         return;
     }
 
-    auto handle_successful_bitmap_decode = [strong_this = GC::Root(*this)](Web::Platform::DecodedImage& result) -> ErrorOr<void> {
+    MARKER_START_TIME(image_decode_start);
+    auto image_url_string = url_string.to_string();
+    auto image_byte_count = static_cast<i64>(data.size());
+
+    auto handle_successful_bitmap_decode = [strong_this = GC::Root(*this), image_decode_start, image_url_string, image_byte_count](Web::Platform::DecodedImage& result) -> ErrorOr<void> {
+        MARKER_INTERVAL("Image decode"sv, "ImageDecode"sv,
+            Core::MarkerCategory::Graphics, image_decode_start,
+            {
+                { "url"sv, image_url_string },
+                { "bytes"sv, static_cast<i64>(image_byte_count) },
+            });
         if (result.session_id != 0) {
             // Streaming animated decode: create AnimatedDecodedImageData.
             Vector<NonnullRefPtr<Gfx::Bitmap>> initial_bitmaps;

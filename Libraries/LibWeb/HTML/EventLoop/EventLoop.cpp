@@ -7,6 +7,7 @@
 
 #include <AK/TemporaryChange.h>
 #include <LibCore/EventLoop.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/CSS/FontComputer.h>
@@ -31,6 +32,50 @@
 #include <LibWeb/Platform/Timer.h>
 
 namespace Web::HTML {
+
+static StringView task_source_marker_name(Task::Source source)
+{
+    switch (source) {
+    case Task::Source::Unspecified:
+        return "Task: Unspecified"sv;
+    case Task::Source::DOMManipulation:
+        return "Task: DOM Manipulation"sv;
+    case Task::Source::UserInteraction:
+        return "Task: User Interaction"sv;
+    case Task::Source::Networking:
+        return "Task: Networking"sv;
+    case Task::Source::HistoryTraversal:
+        return "Task: History Traversal"sv;
+    case Task::Source::IdleTask:
+        return "Task: Idle"sv;
+    case Task::Source::PostedMessage:
+        return "Task: Posted Message"sv;
+    case Task::Source::Microtask:
+        return "Task: Microtask"sv;
+    case Task::Source::TimerTask:
+        return "Task: Timer"sv;
+    case Task::Source::JavaScriptEngine:
+        return "Task: JS Engine"sv;
+    case Task::Source::Geolocation:
+        return "Task: Geolocation"sv;
+    case Task::Source::BitmapTask:
+        return "Task: Bitmap"sv;
+    case Task::Source::NavigationAndTraversal:
+        return "Task: Navigation"sv;
+    case Task::Source::FileReading:
+        return "Task: File Reading"sv;
+    case Task::Source::IntersectionObserver:
+        return "Task: IntersectionObserver"sv;
+    case Task::Source::PerformanceTimeline:
+        return "Task: Performance Timeline"sv;
+    case Task::Source::CanvasBlobSerializationTask:
+        return "Task: Canvas Blob"sv;
+    case Task::Source::Clipboard:
+        return "Task: Clipboard"sv;
+    default:
+        return "Task"sv;
+    }
+}
 
 GC_DEFINE_ALLOCATOR(EventLoop);
 
@@ -148,8 +193,14 @@ void EventLoop::process()
         // 5. Set the event loop's currently running task to oldestTask.
         m_currently_running_task = oldest_task.ptr();
 
-        // 6. Perform oldestTask's steps.
-        oldest_task->execute();
+        {
+            auto source_name = task_source_marker_name(oldest_task->source());
+            MARKER_SCOPE_FIELDS(source_name, "Task"sv, Core::MarkerCategory::Other,
+                { { "source"sv, source_name } });
+
+            // 6. Perform oldestTask's steps.
+            oldest_task->execute();
+        }
 
         // 7. Set the event loop's currently running task back to null.
         m_currently_running_task = nullptr;
@@ -604,6 +655,19 @@ void EventLoop::perform_a_microtask_checkpoint()
     // NOTE: This assertion is per requirement 9.5 of the ECMA-262 spec, see: https://tc39.es/ecma262/#sec-jobs
     // > At some future point in time, when there is no running context in the agent for which the job is scheduled and that agent's execution context stack is empty...
     VERIFY(vm().execution_context_stack().is_empty());
+
+    auto initial_queue_size = m_microtask_queue.size();
+    // Only mark when there are actually microtasks to run — perform_a_microtask_checkpoint
+    // is called extremely frequently with an empty queue and would otherwise flood the profile.
+    // Skip empty queues; raise threshold to skip trivial single-microtask checkpoints too.
+    MARKER_START_TIME(microtask_marker_start);
+    ScopeGuard add_microtask_marker = [&] {
+        if (initial_queue_size >= 2) {
+            MARKER_INTERVAL("Microtask checkpoint"sv,
+                "MicrotaskCheckpoint"sv, Core::MarkerCategory::JavaScript, microtask_marker_start,
+                { { "count"sv, static_cast<i64>(initial_queue_size) } });
+        }
+    };
 
     // 2. Set the event loop's performing a microtask checkpoint to true.
     m_performing_a_microtask_checkpoint = true;

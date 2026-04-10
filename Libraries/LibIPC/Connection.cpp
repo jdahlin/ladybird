@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/ScopeGuard.h>
 #include <AK/Vector.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibIPC/Connection.h>
 #include <LibIPC/Message.h>
 #include <LibIPC/Stub.h>
@@ -71,6 +73,9 @@ void ConnectionBase::handle_messages()
 
         if (!is_open())
             dbgln("Handling message while connection closed: {}", message->message_name());
+
+        MARKER_SCOPE_FIELDS("IPC handle"sv, "IPCHandle"sv, Core::MarkerCategory::IPC,
+            { { "name"sv, message->message_name() } });
 
         auto handler_result = m_local_stub.handle(move(message));
         if (handler_result.is_error()) {

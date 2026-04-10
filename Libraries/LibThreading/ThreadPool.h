@@ -24,7 +24,7 @@ public:
 private:
     ThreadPool();
 
-    intptr_t worker_thread_func();
+    intptr_t worker_thread_func(size_t worker_index);
 
     Mutex m_mutex;
     ConditionVariable m_condition { m_mutex };

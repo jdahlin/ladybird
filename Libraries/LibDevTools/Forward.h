@@ -29,6 +29,7 @@ class NetworkParentActor;
 class NodeActor;
 class PageStyleActor;
 class ParentAccessibilityActor;
+class PerfActor;
 class PreferenceActor;
 class ProcessActor;
 class RootActor;

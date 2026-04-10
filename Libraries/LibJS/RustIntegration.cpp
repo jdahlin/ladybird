@@ -9,6 +9,7 @@
 #include <AK/Utf16String.h>
 #include <AK/Utf16View.h>
 #include <AK/kmalloc.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibGC/DeferGC.h>
 #include <LibJS/Bytecode/ClassBlueprint.h>
 #include <LibJS/Bytecode/Executable.h>
@@ -356,6 +357,13 @@ bool rust_pipeline_available()
 
 ParsedProgram* parse_program(u16 const* utf16_data, size_t length_in_code_units, ProgramType type, size_t line_number_offset)
 {
+    MARKER_SCOPE_FIELDS(
+        type == ProgramType::Module ? "Parse module"sv : "Parse script"sv,
+        "ParseScript"sv, Core::MarkerCategory::Parser,
+        {
+            { "kind"sv, type == ProgramType::Module ? "module"sv : "script"sv },
+            { "size"sv, static_cast<i64>(length_in_code_units) },
+        });
     return rust_parse_program(utf16_data, length_in_code_units, static_cast<u8>(type), line_number_offset, g_dump_ast, g_dump_ast_use_color);
 }
 
@@ -386,6 +394,12 @@ Optional<Result<ScriptResult, Vector<ParserError>>> compile_parsed_script(Parsed
     GC::DeferGC defer_gc(realm.vm().heap());
     ScriptGdiBuilder builder;
 
+    MARKER_SCOPE_FIELDS("Compile script"sv,
+        "CompileScript"sv, Core::MarkerCategory::Parser,
+        {
+            { "kind"sv, "script"sv },
+            { "size"sv, static_cast<i64>(length) },
+        });
     void* exec_ptr = rust_compile_parsed_script(parsed, &realm.vm(), source_code.ptr(), &builder, length);
 
     if (!exec_ptr)
@@ -475,6 +489,12 @@ Optional<Result<ModuleResult, Vector<ParserError>>> compile_parsed_module(Parsed
 
     void* tla_executable = nullptr;
 
+    MARKER_SCOPE_FIELDS("Compile module"sv,
+        "CompileScript"sv, Core::MarkerCategory::Parser,
+        {
+            { "kind"sv, "module"sv },
+            { "size"sv, static_cast<i64>(length) },
+        });
     void* exec_ptr = rust_compile_parsed_module(parsed, &realm.vm(), source_code.ptr(),
         &builder, &callbacks, &tla_executable, length);
 

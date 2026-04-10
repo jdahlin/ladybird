@@ -293,6 +293,12 @@ ExecutionContext* Interpreter::push_inline_frame(
     }
     callee_context->private_environment = callee_function.m_private_environment;
 
+    // IMPORTANT: Set executable BEFORE pushing onto the stack. The profiler signal
+    // handler may interrupt this thread at any point and walk the execution context
+    // stack. If executable is uninitialized when the context is visible on the stack,
+    // the profiler will crash dereferencing garbage.
+    callee_context->executable = callee_executable;
+
     // Fast-path push onto execution context stack (avoids Vector::append growth check preventing inlining).
     auto& ec_stack = vm().execution_context_stack();
     if (ec_stack.size() < ec_stack.capacity()) [[likely]]
@@ -303,12 +309,6 @@ ExecutionContext* Interpreter::push_inline_frame(
     // Bind this if the function uses it.
     if (callee_function.uses_this())
         callee_function.ordinary_call_bind_this(vm(), *callee_context, this_value);
-
-    // Set up execution context fields that run_executable normally does.
-    // NB: We must use the callee's realm (not the caller's) for global_object
-    //     and global_declarative_environment, since the caller's realm may differ
-    //     in cross-realm calls (e.g. iframe <-> parent).
-    callee_context->executable = callee_executable;
 
     // Set this value register.
     auto* values = callee_context->registers_and_constants_and_locals_and_arguments();

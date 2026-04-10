@@ -10,10 +10,16 @@
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
 
+namespace Core {
+
+class MarkerCollector;
+
+}
+
 namespace JS {
 
 class Profiler;
 
-JS_API String write_gecko_profile(Profiler const&);
+JS_API String write_gecko_profile(Profiler const&, Core::MarkerCollector const* = nullptr);
 
 }

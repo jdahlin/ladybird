@@ -249,6 +249,8 @@ private:
     virtual void stop_listening_for_navigation_events(DevTools::TabDescription const&) const override;
     virtual void did_connect_devtools_client(DevTools::TabDescription const&) const override;
     virtual void did_disconnect_devtools_client(DevTools::TabDescription const&) const override;
+    virtual void start_profiling(DevTools::TabDescription const&, u32 interval_us) const override;
+    virtual void stop_profiling(DevTools::TabDescription const&, OnProfilingComplete) const override;
 
     static Application* s_the;
 

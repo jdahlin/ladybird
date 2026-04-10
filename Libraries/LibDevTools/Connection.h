@@ -25,6 +25,7 @@ public:
     Function<void(JsonObject)> on_message_received;
 
     void send_message(JsonValue const&);
+    void send_bulk_data(StringView actor, StringView type, ReadonlyBytes data);
 
 private:
     explicit Connection(NonnullOwnPtr<Core::BufferedTCPSocket>);

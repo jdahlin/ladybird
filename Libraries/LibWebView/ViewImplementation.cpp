@@ -411,6 +411,18 @@ void ViewImplementation::did_disconnect_devtools_client()
     client().async_did_disconnect_devtools_client(page_id());
 }
 
+void ViewImplementation::start_profiling(u32 interval_us)
+{
+    m_profiling_interval_us = interval_us;
+    client().async_start_profiling(page_id(), interval_us);
+}
+
+void ViewImplementation::stop_profiling()
+{
+    m_profiling_interval_us = {};
+    client().async_stop_profiling(page_id());
+}
+
 void ViewImplementation::get_dom_node_inner_html(Web::UniqueNodeID node_id)
 {
     client().async_get_dom_node_inner_html(page_id(), node_id);
@@ -650,6 +662,10 @@ void ViewImplementation::initialize_client(CreateNewClient create_new_client)
     // If DevTools is connected, notify the new WebContent process.
     if (m_devtools_connected)
         client().async_did_connect_devtools_client(page_id());
+
+    // If profiling was active, re-attach the profiler to the new WebContent process.
+    if (m_profiling_interval_us.has_value())
+        client().async_start_profiling(page_id(), *m_profiling_interval_us);
 }
 
 void ViewImplementation::handle_web_content_process_crash(LoadErrorPage load_error_page)

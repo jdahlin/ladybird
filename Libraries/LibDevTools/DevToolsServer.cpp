@@ -12,6 +12,7 @@
 #include <LibCore/TCPServer.h>
 #include <LibDevTools/Actors/DeviceActor.h>
 #include <LibDevTools/Actors/ParentAccessibilityActor.h>
+#include <LibDevTools/Actors/PerfActor.h>
 #include <LibDevTools/Actors/PreferenceActor.h>
 #include <LibDevTools/Actors/ProcessActor.h>
 #include <LibDevTools/Actors/TabActor.h>
@@ -59,8 +60,12 @@ void DevToolsServer::refresh_tab_list()
 
 ErrorOr<void> DevToolsServer::on_new_client()
 {
-    if (m_connection)
-        return Error::from_string_literal("Only one active DevTools connection is currently allowed");
+    // Close any existing connection to allow reconnection.
+    if (m_connection) {
+        m_connection = nullptr;
+        m_actor_registry.clear();
+        m_root_actor = nullptr;
+    }
 
     auto client = TRY(m_server->accept());
     auto buffered_socket = TRY(Core::BufferedTCPSocket::create(move(client)));
@@ -78,6 +83,7 @@ ErrorOr<void> DevToolsServer::on_new_client()
     m_root_actor = register_actor<RootActor>();
 
     register_actor<DeviceActor>();
+    register_actor<PerfActor>();
     register_actor<PreferenceActor>();
     register_actor<ProcessActor>(ProcessDescription { .is_parent = true });
     register_actor<ParentAccessibilityActor>();

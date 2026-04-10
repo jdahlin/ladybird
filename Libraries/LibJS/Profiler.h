@@ -12,6 +12,7 @@
 #include <AK/Time.h>
 #include <AK/Utf16FlyString.h>
 #include <AK/Vector.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
 #include <LibThreading/Thread.h>
@@ -39,6 +40,7 @@ public:
         u32 string_index;
         u32 line;
         u32 column;
+        u8 category; // Core::MarkerCategory underlying value (default JavaScript = 3)
     };
     struct Stack {
         u32 frame_index;
@@ -53,10 +55,49 @@ public:
     Vector<Frame> const& frame_table() const { return m_frame_table; }
     Vector<Stack> const& stack_table() const { return m_stack_table; }
     Vector<Sample> const& samples() const { return m_samples; }
+
+    struct NetworkTimings {
+        double domain_lookup_start_ms { 0 };
+        double domain_lookup_end_ms { 0 };
+        double connect_start_ms { 0 };
+        double tcp_connect_end_ms { 0 };
+        double secure_connection_start_ms { 0 };
+        double connect_end_ms { 0 };
+        double request_start_ms { 0 };
+        double response_start_ms { 0 };
+        double response_end_ms { 0 };
+    };
+
+    // Network markers: two per request (STATUS_START + STATUS_STOP) linked by id.
+    // Raw data is stored and serialized only during gecko profile export.
+    struct NetworkMarker {
+        u64 id;
+        String url;
+        String method;
+        double start_time_ms;
+        double end_time_ms;
+        bool is_stop { false };
+        u32 status_code { 0 };
+        String content_type;
+        i64 body_size { 0 };
+        NetworkTimings timings;
+    };
+    Vector<NetworkMarker> const& network_markers() const { return m_network_markers; }
+
+    void add_network_request_start(u64 id, String url, String method, double start_time_ms);
+    void add_network_request_stop(u64 id, String url, String method, double start_time_ms, double end_time_ms,
+        u32 status_code, String content_type, i64 body_size, NetworkTimings const&);
+
+    double elapsed_ms_since_start() const;
     int interval_us() const { return m_interval_us; }
     i64 start_time_epoch_ms() const;
     i64 stop_time_epoch_ms() const;
     u64 os_tid() const;
+
+    // Walk the JS execution context stack and produce a list of frame names.
+    // Used by MarkerCollector to attach a "cause" stack to each marker.
+    // Cheap if the stack is small; allocates per call.
+    void capture_marker_stack(Vector<Core::MarkerStackFrame, 8>& out);
 
 private:
     static constexpr u32 MAX_STACK_DEPTH = 64;
@@ -74,8 +115,15 @@ private:
     //  - The frame name is copied from Bytecode::Executable::name while the executable is live.
     struct UnprocessedFrame {
         FlatPtr executable;  // Bytecode::Executable const* — GC cell, valid only during capture_sample()
+                             // SENTINEL: 0 means this is a synthetic marker scope frame, not a JS frame.
         u32 program_counter; // offset into executable->bytecode (not a machine PC)
-        Utf16FlyString name;
+                             // For synthetic marker frames: low byte = MarkerCategory enum value.
+        Utf16FlyString name; // For JS frames: function name. For marker frames: empty.
+        // For synthetic marker frames only: raw pointer to the marker name string
+        // (always a static string literal, so the pointer is stable). Read at
+        // process_raw_samples() time, never inside the signal handler.
+        char const* marker_name_ptr { nullptr };
+        u32 marker_name_len { 0 };
     };
     struct RawSample {
         double time_ms;
@@ -97,13 +145,12 @@ private:
     void process_and_free_raw_samples();
     void capture_frames(RawSample&, Optional<u32> leaf_program_counter);
     void stop_timer_thread();
-    double elapsed_ms_since_start() const;
     void allocate_sample_buffer();
     void collect_and_free_samples();
 
     void process_raw_samples();
     u32 intern_string(String const&);
-    u32 intern_frame(String const& location, u32 line, u32 column);
+    u32 intern_frame(String const& location, u32 line, u32 column, u8 category);
     u32 intern_stack_trace(RawSample const&);
 
     VM& m_vm;
@@ -132,6 +179,7 @@ private:
     Vector<Stack> m_stack_table;
     HashMap<u64, u32> m_stack_map;
     Vector<Sample> m_samples;
+    Vector<NetworkMarker> m_network_markers;
 };
 
 inline i64 Profiler::start_time_epoch_ms() const

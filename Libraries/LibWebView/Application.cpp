@@ -1714,4 +1714,29 @@ void Application::did_disconnect_devtools_client(DevTools::TabDescription const&
     view->did_disconnect_devtools_client();
 }
 
+void Application::start_profiling(DevTools::TabDescription const& description, u32 interval_us) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value())
+        return;
+
+    view->start_profiling(interval_us);
+}
+
+void Application::stop_profiling(DevTools::TabDescription const& description, OnProfilingComplete on_complete) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value()) {
+        on_complete(Error::from_string_literal("Unable to locate tab"));
+        return;
+    }
+
+    view->on_received_profiling_result = [&view = *view, on_complete = move(on_complete)](String profile_json) {
+        view.on_received_profiling_result = nullptr;
+        on_complete(move(profile_json));
+    };
+
+    view->stop_profiling();
+}
+
 }

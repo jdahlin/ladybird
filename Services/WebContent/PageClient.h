@@ -8,8 +8,10 @@
 
 #pragma once
 
+#include <AK/OwnPtr.h>
 #include <LibGfx/Rect.h>
 #include <LibGfx/SharedImage.h>
+#include <LibJS/Forward.h>
 #include <LibWeb/CSS/StyleSheetIdentifier.h>
 #include <LibWeb/HTML/AudioPlayState.h>
 #include <LibWeb/HTML/FileFilter.h>
@@ -20,6 +22,18 @@
 #include <LibWebView/Forward.h>
 #include <LibWebView/StorageSetResult.h>
 #include <WebContent/Forward.h>
+
+namespace Core {
+
+class MarkerCollector;
+
+}
+
+namespace JS {
+
+class Profiler;
+
+}
 
 namespace WebContent {
 
@@ -84,6 +98,9 @@ public:
     void did_connect_devtools_client();
     void did_disconnect_devtools_client();
     bool has_devtools_client() const { return m_devtools_client_count > 0; }
+
+    void start_profiling(u32 interval_us);
+    void stop_profiling();
 
     void ready_to_paint();
 
@@ -228,6 +245,19 @@ private:
     RefPtr<Core::Timer> m_paint_refresh_timer;
 
     u64 m_devtools_client_count { 0 };
+
+    OwnPtr<JS::Profiler> m_profiler;
+    OwnPtr<Core::MarkerCollector> m_marker_collector;
+    RefPtr<Core::Timer> m_counter_sample_timer;
+
+    struct PendingNetworkRequest {
+        String url;
+        String method;
+        double start_time_ms { 0 };
+        u32 status_code { 0 };
+        String content_type;
+    };
+    HashMap<u64, PendingNetworkRequest> m_pending_network_requests;
 };
 
 }

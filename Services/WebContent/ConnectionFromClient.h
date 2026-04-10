@@ -93,6 +93,8 @@ private:
     virtual void set_listen_for_dom_mutations(u64 page_id, bool) override;
     virtual void did_connect_devtools_client(u64 page_id) override;
     virtual void did_disconnect_devtools_client(u64 page_id) override;
+    virtual void start_profiling(u64 page_id, u32 interval_us) override;
+    virtual void stop_profiling(u64 page_id) override;
     virtual void get_dom_node_inner_html(u64 page_id, Web::UniqueNodeID node_id) override;
     virtual void get_dom_node_outer_html(u64 page_id, Web::UniqueNodeID node_id) override;
     virtual void set_dom_node_outer_html(u64 page_id, Web::UniqueNodeID node_id, String html) override;

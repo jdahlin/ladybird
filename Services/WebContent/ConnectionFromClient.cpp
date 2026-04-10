@@ -681,6 +681,18 @@ void ConnectionFromClient::did_disconnect_devtools_client(u64 page_id)
     page->did_disconnect_devtools_client();
 }
 
+void ConnectionFromClient::start_profiling(u64 page_id, u32 interval_us)
+{
+    if (auto page = this->page(page_id); page.has_value())
+        page->start_profiling(interval_us);
+}
+
+void ConnectionFromClient::stop_profiling(u64 page_id)
+{
+    if (auto page = this->page(page_id); page.has_value())
+        page->stop_profiling();
+}
+
 void ConnectionFromClient::get_dom_node_inner_html(u64 page_id, Web::UniqueNodeID node_id)
 {
     auto* dom_node = Web::DOM::Node::from_unique_id(node_id);

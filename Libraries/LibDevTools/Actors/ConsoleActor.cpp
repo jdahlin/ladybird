@@ -50,6 +50,19 @@ void ConsoleActor::handle_message(Message const& message)
         return;
     }
 
+    if (message.type == "startListeners"sv) {
+        response.set("startedListeners"sv, message.data.get_array("listeners"sv).value_or(JsonArray {}));
+        response.set("nativeConsoleAPI"sv, true);
+        send_response(message, move(response));
+        return;
+    }
+
+    if (message.type == "stopListeners"sv) {
+        response.set("stoppedListeners"sv, message.data.get_array("listeners"sv).value_or(JsonArray {}));
+        send_response(message, move(response));
+        return;
+    }
+
     if (message.type == "evaluateJSAsync"sv) {
         auto text = get_required_parameter<String>(message, "text"sv);
         if (!text.has_value())

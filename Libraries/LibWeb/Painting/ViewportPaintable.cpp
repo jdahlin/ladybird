@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/MarkerCollector.h>
 #include <LibWeb/CSS/PropertyID.h>
 #include <LibWeb/CSS/VisualViewport.h>
 #include <LibWeb/DOM/Document.h>
@@ -83,6 +84,7 @@ void ViewportPaintable::build_stacking_context_tree()
 
 void ViewportPaintable::paint_all_phases(DisplayListRecordingContext& context)
 {
+    MARKER_SCOPE("Paint stacking contexts"sv, "Paint"sv, Core::MarkerCategory::Paint);
     build_stacking_context_tree_if_needed();
     context.display_list_recorder().save_layer();
     stacking_context()->paint(context);

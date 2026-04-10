@@ -123,6 +123,8 @@ public:
     void set_listen_for_dom_mutations(bool);
     void did_connect_devtools_client();
     void did_disconnect_devtools_client();
+    void start_profiling(u32 interval_us);
+    void stop_profiling();
     void get_dom_node_inner_html(Web::UniqueNodeID node_id);
     void get_dom_node_outer_html(Web::UniqueNodeID node_id);
     void set_dom_node_outer_html(Web::UniqueNodeID node_id, String const& html);
@@ -229,6 +231,7 @@ public:
     Function<void(Vector<Web::CSS::StyleSheetIdentifier>)> on_received_style_sheet_list;
     Function<void(Web::CSS::StyleSheetIdentifier const&, URL::URL const&, String const&)> on_received_style_sheet_source;
     Function<void(JsonValue)> on_received_js_console_result;
+    Function<void(String)> on_received_profiling_result;
     Function<void(ConsoleOutput)> on_console_message;
     Function<void(u64 request_id, URL::URL const&, ByteString const&, Vector<HTTP::Header> const&, ByteBuffer, Optional<String>)> on_network_request_started;
     Function<void(u64 request_id, u32 status_code, Optional<String> const&, Vector<HTTP::Header> const&)> on_network_response_headers_received;
@@ -410,6 +413,7 @@ protected:
     u64 m_next_navigation_listener_id { 1 };
 
     bool m_devtools_connected { false };
+    Optional<u32> m_profiling_interval_us;
 };
 
 }

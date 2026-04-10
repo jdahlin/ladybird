@@ -11,6 +11,7 @@
 #include <AK/String.h>
 #include <AK/Utf8View.h>
 #include <AK/Vector.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibGC/Function.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ImmutableBitmap.h>
@@ -586,6 +587,14 @@ i32 WindowOrWorkerGlobalScopeMixin::run_timer_initialization_steps(TimerHandler 
 
         // FIXME: 3. If global's map of setTimeout and setInterval IDs[id] does not equal uniqueHandle, then abort these steps.
         // FIXME: 4. Record timing info for timer handler given handler, global's relevant settings object, and repeat.
+
+        MARKER_START_TIME(timer_marker_start);
+        ScopeGuard add_timer_marker = [&] {
+            MARKER_INTERVAL(
+                repeat == Repeat::Yes ? "setInterval callback"sv : "setTimeout callback"sv,
+                "Text"sv, Core::MarkerCategory::DOM, timer_marker_start,
+                { { "name"sv, MUST(String::formatted("id={} timeout={}ms", id, timeout)) } });
+        };
 
         bool continue_ = handler.visit(
             // 5. If handler is a Function, then invoke handler given arguments and "report", and with callback this value set to thisArg.

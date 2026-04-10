@@ -436,6 +436,14 @@ void WebContentClient::did_output_js_console_message(u64 page_id, ConsoleOutput 
     }
 }
 
+void WebContentClient::did_finish_profiling(u64 page_id, String gecko_profile_json)
+{
+    if (auto view = view_for_page_id(page_id); view.has_value()) {
+        if (view->on_received_profiling_result)
+            view->on_received_profiling_result(move(gecko_profile_json));
+    }
+}
+
 void WebContentClient::did_start_network_request(u64 page_id, u64 request_id, URL::URL url, ByteString method, Vector<HTTP::Header> request_headers, ByteBuffer request_body, Optional<String> initiator_type)
 {
     if (auto view = view_for_page_id(page_id); view.has_value()) {

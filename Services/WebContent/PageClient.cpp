@@ -9,13 +9,17 @@
 
 #include <AK/JsonObjectSerializer.h>
 #include <AK/JsonValue.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibCore/Timer.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ShareableBitmap.h>
 #include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibIPC/TransportHandle.h>
 #include <LibJS/Console.h>
+#include <LibJS/GeckoProfileWriter.h>
+#include <LibJS/Profiler.h>
 #include <LibJS/Runtime/ConsoleObject.h>
+#include <LibThreading/ThreadPool.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/CSS/CSSImportRule.h>
 #include <LibWeb/CSS/StyleSheetList.h>
@@ -40,6 +44,7 @@
 #include <WebContent/WebContentClientEndpoint.h>
 #include <WebContent/WebDriverConnection.h>
 #include <WebContent/WebUIConnection.h>
+#include <sys/resource.h>
 
 namespace WebContent {
 
@@ -81,6 +86,7 @@ PageClient::PageClient(PageHost& owner, u64 id)
     int refresh_interval = static_cast<int>(1000.0 / m_maximum_frames_per_second);
 
     m_paint_refresh_timer = Core::Timer::create_repeating(refresh_interval, [] {
+        MARKER_INSTANT("Vsync"sv, "Text"sv, Core::MarkerCategory::Graphics, {});
         Web::HTML::main_thread_event_loop().queue_task_to_update_the_rendering();
     });
 
@@ -819,11 +825,31 @@ void PageClient::received_message_from_web_ui(String const& name, JS::Value data
 void PageClient::page_did_start_network_request(u64 request_id, URL::URL const& url, ByteString const& method, Vector<HTTP::Header> const& request_headers, ReadonlyBytes request_body, Optional<String> initiator_type)
 {
     client().async_did_start_network_request(m_id, request_id, url, method, request_headers, request_body, move(initiator_type));
+
+    if (m_profiler) {
+        auto start_ms = m_profiler->elapsed_ms_since_start();
+        m_pending_network_requests.set(request_id, PendingNetworkRequest {
+                                                       .url = url.serialize(),
+                                                       .method = MUST(String::from_byte_string(method)),
+                                                       .start_time_ms = start_ms,
+                                                       .status_code = 0,
+                                                       .content_type = {},
+                                                   });
+        m_profiler->add_network_request_start(request_id, url.serialize(), MUST(String::from_byte_string(method)), start_ms);
+    }
 }
 
 void PageClient::page_did_receive_network_response_headers(u64 request_id, u32 status_code, Optional<String> reason_phrase, Vector<HTTP::Header> const& response_headers)
 {
     client().async_did_receive_network_response_headers(m_id, request_id, status_code, move(reason_phrase), response_headers);
+
+    if (auto it = m_pending_network_requests.find(request_id); it != m_pending_network_requests.end()) {
+        it->value.status_code = status_code;
+        for (auto const& header : response_headers) {
+            if (header.name.equals_ignoring_ascii_case("content-type"sv))
+                it->value.content_type = MUST(String::from_byte_string(header.value));
+        }
+    }
 }
 
 void PageClient::page_did_receive_network_response_body(u64 request_id, ReadonlyBytes data)
@@ -844,9 +870,187 @@ void PageClient::did_disconnect_devtools_client()
     --m_devtools_client_count;
 }
 
+void PageClient::start_profiling(u32 interval_us)
+{
+    auto& vm = Web::Bindings::main_thread_vm();
+
+    // Stop any existing profiler first
+    if (m_profiler) {
+        m_profiler->stop();
+        vm.set_profiler(nullptr);
+        m_profiler = nullptr;
+    }
+    if (m_marker_collector) {
+        Core::g_marker_collector = nullptr;
+        m_marker_collector = nullptr;
+    }
+
+    m_marker_collector = make<Core::MarkerCollector>();
+    if (auto const* env = getenv("LADYBIRD_MARKER_DEBUG"); env && env[0] == '1')
+        m_marker_collector->set_debug(true);
+    m_marker_collector->set_process_name("WebContent"_string);
+    m_marker_collector->set_process_type("content"_string);
+    Core::g_marker_collector = m_marker_collector.ptr();
+
+    // Pre-warm the thread pool so worker threads register their names with the
+    // collector now (instead of lazily on first use, which may be after profiling stops).
+    Threading::ThreadPool::the().submit([] { });
+
+    m_profiler = make<JS::Profiler>(vm, interval_us);
+    vm.set_profiler(m_profiler.ptr());
+    m_profiler->start();
+
+    // Connect the profiler to the marker collector so each marker captures
+    // the JS call stack at emit time. This populates the "cause" field on
+    // markers in profiler.firefox.com.
+    m_marker_collector->set_stack_capture(
+        [profiler = m_profiler.ptr()](Vector<Core::MarkerStackFrame, 8>& out) {
+            profiler->capture_marker_stack(out);
+        });
+
+    // Sample memory and CPU periodically. Counter graphs at the top of the timeline.
+    m_counter_sample_timer = Core::Timer::create_repeating(100, [collector = m_marker_collector.ptr()] {
+        if (!collector)
+            return;
+
+        // Process-wide memory: read VmRSS from /proc/self/status. This is the
+        // CURRENT resident set size (in bytes). getrusage's ru_maxrss is the
+        // peak — not what we want for a graph showing memory over time.
+        if (auto file_or_error = Core::File::open("/proc/self/status"sv, Core::File::OpenMode::Read); !file_or_error.is_error()) {
+            auto buffer_or_error = file_or_error.value()->read_until_eof();
+            if (!buffer_or_error.is_error()) {
+                auto contents = StringView { buffer_or_error.value() };
+                for (auto line : contents.split_view('\n')) {
+                    if (!line.starts_with("VmRSS:"sv))
+                        continue;
+                    auto rest = line.substring_view(6).trim_whitespace();
+                    // Format: "<number> kB"
+                    auto space = rest.find(' ');
+                    if (space.has_value()) {
+                        auto num_part = rest.substring_view(0, *space);
+                        if (auto kb = num_part.to_number<u64>(); kb.has_value()) {
+                            collector->add_counter_sample("memory"sv, "Memory"sv, "Resident set size"sv,
+                                static_cast<i64>(kb.value()) * 1024, 0);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Process CPU time from getrusage. Sum of user + system in milliseconds.
+        struct rusage usage;
+        if (getrusage(RUSAGE_SELF, &usage) == 0) {
+            i64 cpu_us = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000000
+                + usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+            collector->add_counter_sample("processCPU"sv, "CPU"sv, "Process CPU usage"sv,
+                cpu_us / 1000, 0);
+        }
+
+        // Per-thread CPU from /proc/self/task/<tid>/stat (Linux-specific).
+        // This gives us a CPU usage graph per OS thread, even non-JS ones, even though
+        // we don't have stack samples for those threads.
+        for (auto const& [tid, info] : collector->threads()) {
+            auto path = MUST(String::formatted("/proc/self/task/{}/stat", tid));
+            auto file_or_error = Core::File::open(path, Core::File::OpenMode::Read);
+            if (file_or_error.is_error())
+                continue;
+            auto buffer_or_error = file_or_error.value()->read_until_eof();
+            if (buffer_or_error.is_error())
+                continue;
+            auto contents = StringView { buffer_or_error.value() };
+
+            // /proc/<pid>/stat fields after comm (which is in parens): state utime stime ...
+            // We need fields 14 (utime) and 15 (stime), counted from 1, 0-indexed in array.
+            auto close_paren = contents.find_last(')');
+            if (!close_paren.has_value())
+                continue;
+            auto rest = contents.substring_view(*close_paren + 2);
+            auto parts = rest.split_view(' ');
+            if (parts.size() < 14)
+                continue;
+            // utime is parts[11], stime is parts[12] after stripping comm + state
+            // (state is parts[0], utime is parts[11]).
+            auto utime = parts[11].to_number<u64>().value_or(0);
+            auto stime = parts[12].to_number<u64>().value_or(0);
+            auto clock_ticks = utime + stime;
+            // Convert clock ticks to milliseconds. sysconf(_SC_CLK_TCK) is typically 100.
+            static long const ticks_per_sec = sysconf(_SC_CLK_TCK);
+            auto cpu_ms = static_cast<i64>((clock_ticks * 1000) / ticks_per_sec);
+
+            auto counter_name = MUST(String::formatted("threadCPU.{}", info.name));
+            collector->add_counter_sample(counter_name.bytes_as_string_view(),
+                "CPU"sv, "Thread CPU usage"sv, cpu_ms, 0);
+        }
+    });
+    m_counter_sample_timer->start();
+}
+
+void PageClient::stop_profiling()
+{
+    if (!m_profiler)
+        return;
+
+    m_profiler->stop();
+    auto& vm = Web::Bindings::main_thread_vm();
+    vm.set_profiler(nullptr);
+
+    if (m_counter_sample_timer) {
+        m_counter_sample_timer->stop();
+        m_counter_sample_timer = nullptr;
+    }
+
+    auto json = JS::write_gecko_profile(*m_profiler, m_marker_collector.ptr());
+    m_profiler = nullptr;
+
+    Core::g_marker_collector = nullptr;
+    m_marker_collector = nullptr;
+
+    client().async_did_finish_profiling(m_id, move(json));
+}
+
 void PageClient::page_did_finish_network_request(u64 request_id, u64 body_size, Requests::RequestTimingInfo const& timing_info, Optional<Requests::NetworkError> const& network_error)
 {
     client().async_did_finish_network_request(m_id, request_id, body_size, timing_info, network_error);
+
+    if (m_profiler) {
+        if (auto it = m_pending_network_requests.find(request_id); it != m_pending_network_requests.end()) {
+            auto end_time_ms = m_profiler->elapsed_ms_since_start();
+            auto const& req = it->value;
+
+            // Convert absolute microsecond timestamps to ms relative to profile start.
+            // timing_info contains absolute epoch microseconds; req.start_time_ms is
+            // the profiler-relative time when the request started.
+            auto to_ms = [&](i64 us) -> double {
+                if (us == 0)
+                    return 0.0;
+                return req.start_time_ms + static_cast<double>(us - timing_info.domain_lookup_start_microseconds) / 1000.0;
+            };
+
+            m_profiler->add_network_request_stop(
+                request_id,
+                req.url,
+                req.method,
+                req.start_time_ms,
+                end_time_ms,
+                req.status_code,
+                req.content_type,
+                timing_info.encoded_body_size,
+                {
+                    .domain_lookup_start_ms = to_ms(timing_info.domain_lookup_start_microseconds),
+                    .domain_lookup_end_ms = to_ms(timing_info.domain_lookup_end_microseconds),
+                    .connect_start_ms = to_ms(timing_info.connect_start_microseconds),
+                    .tcp_connect_end_ms = to_ms(timing_info.connect_end_microseconds),
+                    .secure_connection_start_ms = to_ms(timing_info.secure_connect_start_microseconds),
+                    .connect_end_ms = to_ms(timing_info.connect_end_microseconds),
+                    .request_start_ms = to_ms(timing_info.request_start_microseconds),
+                    .response_start_ms = to_ms(timing_info.response_start_microseconds),
+                    .response_end_ms = to_ms(timing_info.response_end_microseconds),
+                });
+
+            m_pending_network_requests.remove(it);
+        }
+    }
 }
 
 void PageClient::initialize_js_console(Web::DOM::Document& document)

@@ -7,6 +7,7 @@
 
 #include <AK/Assertions.h>
 #include <AK/TypeCasts.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/FunctionObject.h>
 #include <LibWeb/DOM/AbortSignal.h>
@@ -362,6 +363,10 @@ bool EventDispatcher::dispatch(GC::Ref<EventTarget> target, Event& event, bool l
         // 12. If activationTarget is non-null and activationTarget has legacy-pre-activation behavior, then run activationTarget’s legacy-pre-activation behavior.
         if (activation_target)
             activation_target->legacy_pre_activation_behavior();
+
+        // MARKER_SCOPE pushes a "DOMEvent" frame so samples taken during dispatch
+        // attribute time to DOMEvent in the call tree.
+        MARKER_SCOPE("DOMEvent"sv, "DOMEvent"sv, Core::MarkerCategory::DOM);
 
         // 13. For each struct of event’s path, in reverse order:
         for (auto& entry : event.path().in_reverse()) {

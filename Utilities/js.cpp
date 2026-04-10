@@ -12,6 +12,7 @@
 #include <AK/StringBuilder.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ConfigFile.h>
+#include <LibCore/MarkerCollector.h>
 #include <LibCore/StandardPaths.h>
 #include <LibJS/Bytecode/Interpreter.h>
 #include <LibJS/Console.h>
@@ -845,6 +846,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     bool parse_only = false;
     StringView evaluate_script;
     StringView profile_output;
+    double profile_interval_ms = 1.0;
     Vector<StringView> script_paths;
 
     Core::ArgsParser args_parser;
@@ -863,6 +865,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
     args_parser.add_option(evaluate_script, "Evaluate argument as a script", "evaluate", 'c', "script");
     args_parser.add_option(use_test262_global, "Use test262 global ($262)", "use-test262-global", {});
     args_parser.add_option(profile_output, "Write Gecko profile JSON to file", "profile", 0, "output.json");
+    args_parser.add_option(profile_interval_ms, "Profiler sampling interval in ms (default: 1, min: 0.1)", "profile-interval", 0, "ms");
     args_parser.add_positional_argument(script_paths, "Path to script files", "scripts", Core::ArgsParser::Required::No);
     args_parser.parse(arguments);
 
@@ -951,10 +954,26 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         // We resolve modules as if it is the first file
 
         OwnPtr<JS::Profiler> profiler;
+        OwnPtr<Core::MarkerCollector> marker_collector;
         if (!profile_output.is_empty()) {
-            profiler = make<JS::Profiler>(*g_vm);
+            int interval_us = max(static_cast<int>(profile_interval_ms * 1000), 100);
+            marker_collector = make<Core::MarkerCollector>();
+            if (auto const* env = getenv("LADYBIRD_MARKER_DEBUG"); env && env[0] == '1')
+                marker_collector->set_debug(true);
+            marker_collector->set_process_name("js"_string);
+            marker_collector->set_process_type("default"_string);
+            Core::g_marker_collector = marker_collector.ptr();
+            MARKER_THREAD_REGISTER("GeckoMain"sv);
+            profiler = make<JS::Profiler>(*g_vm, interval_us);
             g_vm->set_profiler(profiler.ptr());
             profiler->start();
+
+            // Connect the profiler to the marker collector so each marker captures
+            // the JS call stack at emit time.
+            marker_collector->set_stack_capture(
+                [p = profiler.ptr()](Vector<Core::MarkerStackFrame, 8>& out) {
+                    p->capture_marker_stack(out);
+                });
         }
 
         if (!TRY(parse_and_run(realm, builder.string_view(), source_name, parse_only)))
@@ -963,7 +982,8 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         if (profiler) {
             profiler->stop();
             g_vm->set_profiler(nullptr);
-            auto json = JS::write_gecko_profile(*profiler);
+            auto json = JS::write_gecko_profile(*profiler, marker_collector.ptr());
+            Core::g_marker_collector = nullptr;
             auto file = TRY(Core::File::open(profile_output, Core::File::OpenMode::Write));
             TRY(file->write_until_depleted(json.bytes()));
             outln("Profile written to {}", profile_output);

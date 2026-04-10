@@ -41,6 +41,8 @@ public:
     // Use send_message when sending an unprompted message to the client.
     void send_message(JsonObject);
 
+    void send_bulk_data(Message const& message, StringView type, ReadonlyBytes data);
+
     void send_missing_parameter_error(Optional<Message const&>, StringView parameter);
     void send_unrecognized_packet_type_error(Message const&);
     void send_unknown_actor_error(Optional<Message const&>, StringView actor);

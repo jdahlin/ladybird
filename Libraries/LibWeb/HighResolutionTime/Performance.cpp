@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibCore/MarkerCollector.h>
 #include <LibWeb/Bindings/PerformancePrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
@@ -85,6 +86,9 @@ WebIDL::ExceptionOr<GC::Ref<UserTiming::PerformanceMark>> Performance::mark(Stri
 
     // 1. Run the PerformanceMark constructor and let entry be the newly created object.
     auto entry = TRY(UserTiming::PerformanceMark::construct_impl(realm, mark_name, mark_options));
+
+    MARKER_INSTANT(mark_name, "UserTiming"sv, Core::MarkerCategory::DOM,
+        { { "name"sv, mark_name }, { "entryType"sv, "mark"sv } });
 
     // 2. Queue entry.
     window_or_worker().queue_performance_entry(entry);
@@ -305,6 +309,20 @@ WebIDL::ExceptionOr<GC::Ref<UserTiming::PerformanceMeasure>> Performance::measur
 
     // 4. Create a new PerformanceMeasure object (entry) with this's relevant realm.
     auto entry = realm.create<UserTiming::PerformanceMeasure>(realm, measure_name, start_time, duration, detail);
+
+    // Profiler marker: an interval marker spanning [start_time, start_time+duration].
+    // start_time/end_time are DOMHighResTimeStamp (ms relative to time origin); convert to MonotonicTime
+    // by taking now() and walking backward by (now_dom - start_time)/(now_dom - end_time).
+    if (Core::g_marker_collector) [[unlikely]] {
+        auto now_mono = Core::marker_now();
+        auto now_dom = now();
+        auto end_dom = start_time + duration;
+        auto marker_start = now_mono - AK::Duration::from_milliseconds(static_cast<i64>(now_dom - start_time));
+        auto marker_end = now_mono - AK::Duration::from_milliseconds(static_cast<i64>(now_dom - end_dom));
+        MARKER_INTERVAL_EXPLICIT(measure_name, "UserTiming"sv, Core::MarkerCategory::DOM,
+            marker_start, marker_end,
+            { { "name"sv, measure_name }, { "entryType"sv, "measure"sv } });
+    }
 
     // 10. Queue entry.
     window_or_worker().queue_performance_entry(entry);

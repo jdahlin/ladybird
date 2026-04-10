@@ -15,6 +15,7 @@ set(SOURCES
     Actors/NodeActor.cpp
     Actors/PageStyleActor.cpp
     Actors/ParentAccessibilityActor.cpp
+    Actors/PerfActor.cpp
     Actors/PreferenceActor.cpp
     Actors/ProcessActor.cpp
     Actors/RootActor.cpp

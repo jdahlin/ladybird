@@ -7,6 +7,7 @@
 #include <AK/JsonObject.h>
 #include <LibDevTools/Actors/DeviceActor.h>
 #include <LibDevTools/Actors/ParentAccessibilityActor.h>
+#include <LibDevTools/Actors/PerfActor.h>
 #include <LibDevTools/Actors/PreferenceActor.h>
 #include <LibDevTools/Actors/ProcessActor.h>
 #include <LibDevTools/Actors/RootActor.h>
@@ -26,6 +27,7 @@ NonnullRefPtr<RootActor> RootActor::create(DevToolsServer& devtools, String name
     traits.set("highlightable"sv, true);
     traits.set("customHighlighters"sv, true);
     traits.set("networkMonitor"sv, true);
+    traits.set("useBulkTransferForPerformanceProfile"sv, true);
 
     JsonObject message;
     message.set("applicationType"sv, "browser"sv);
@@ -59,6 +61,8 @@ void RootActor::handle_message(Message const& message)
                 response.set("deviceActor"sv, actor.key);
             else if (is<ParentAccessibilityActor>(*actor.value))
                 response.set("parentAccessibilityActor"sv, actor.key);
+            else if (is<PerfActor>(*actor.value))
+                response.set("perfActor"sv, actor.key);
             else if (is<PreferenceActor>(*actor.value))
                 response.set("preferenceActor"sv, actor.key);
         }
@@ -143,6 +147,17 @@ void RootActor::handle_message(Message const& message)
         }
 
         response.set("tabs"sv, move(tabs));
+
+        // Include global actor references (Firefox DevTools discovers them here)
+        for (auto const& actor : devtools().actor_registry()) {
+            if (is<DeviceActor>(*actor.value))
+                response.set("deviceActor"sv, actor.key);
+            else if (is<PerfActor>(*actor.value))
+                response.set("perfActor"sv, actor.key);
+            else if (is<PreferenceActor>(*actor.value))
+                response.set("preferenceActor"sv, actor.key);
+        }
+
         send_response(message, move(response));
         return;
     }

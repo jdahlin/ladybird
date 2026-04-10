@@ -54,6 +54,27 @@ void Connection::send_message(JsonValue const& message)
     }
 }
 
+// https://firefox-source-docs.mozilla.org/devtools/backend/protocol.html#stream-transport
+// Bulk packet format: "bulk <actor> <type> <length>:<data>"
+void Connection::send_bulk_data(StringView actor, StringView type, ReadonlyBytes data)
+{
+    auto header = MUST(String::formatted("bulk {} {} {}:", actor, type, data.size()));
+
+    dbgln_if(DEVTOOLS_DEBUG, "\x1b[1;34m<< bulk\x1b[0m {} {} ({} bytes)", actor, type, data.size());
+
+    (void)m_socket->set_blocking(true);
+    auto result = m_socket->write_until_depleted(header);
+    if (!result.is_error())
+        result = m_socket->write_until_depleted(data);
+    (void)m_socket->set_blocking(false);
+
+    if (result.is_error()) {
+        warnln("DevTools: Failed to send bulk data ({} bytes): {}", data.size(), result.error());
+        if (on_connection_closed)
+            on_connection_closed();
+    }
+}
+
 // https://firefox-source-docs.mozilla.org/devtools/backend/protocol.html#packets
 ErrorOr<JsonValue> Connection::read_message()
 {
