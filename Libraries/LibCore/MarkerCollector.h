@@ -16,6 +16,7 @@
 #include <AK/Variant.h>
 #include <AK/Vector.h>
 #include <LibCore/Export.h>
+#include <LibCore/MarkerCategory.h>
 #include <pthread.h>
 
 namespace Core {
@@ -25,27 +26,6 @@ enum class MarkerPhase : u8 {
     Interval = 1,
     IntervalStart = 2,
     IntervalEnd = 3,
-};
-
-// Strongly-typed category — adding a value here will cause exhaustive switches
-// in build_categories() and category_to_underlying() to break, forcing updates.
-enum class MarkerCategory : u8 {
-    Other = 0,
-    Idle = 1,
-    Layout = 2,
-    JavaScript = 3,
-    GC = 4,
-    Network = 5,
-    Graphics = 6,
-    DOM = 7,
-    IPC = 8,
-    Media = 9,
-    Timer = 10,
-    Profiler = 11,
-    Accessibility = 12,
-    Style = 13,
-    Paint = 14,
-    Parser = 15,
 };
 
 // Either a static StringView (literal — no allocation) or a heap-owned String.
@@ -68,22 +48,6 @@ struct MarkerStackFrame {
     u32 line { 0 };
     u32 column { 0 };
 };
-
-// Active marker scope frame. Pushed onto a thread-local stack by MarkerScope on
-// construction, popped on destruction. The JS Profiler walks this stack at sample
-// time (often from a signal handler) and prepends synthetic frames to each
-// captured call stack — making the call tree show "Layout 30% > Style 28% > ..."
-// naturally.
-//
-// IMPORTANT: name MUST point to memory that outlives the scope (string literal).
-// The signal handler must not allocate, so the field is a raw StringView.
-struct MarkerScopeFrame {
-    StringView name;
-    MarkerCategory category;
-};
-
-// Thread-local stack of currently-active marker scopes.
-extern CORE_API thread_local Vector<MarkerScopeFrame, 8> t_marker_scope_stack;
 
 // Marker stores absolute MonotonicTime — converted to profile-relative ms at export.
 struct Marker {

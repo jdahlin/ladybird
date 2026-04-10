@@ -6,15 +6,11 @@
 
 #include <AK/StringBuilder.h>
 #include <LibCore/MarkerCollector.h>
+#include <LibCore/Profiler/Label.h>
 
 namespace Core {
 
 MarkerCollector* g_marker_collector { nullptr };
-
-// Thread-local stack of currently-active marker scopes.
-// The JS Profiler walks this at sample time and prepends synthetic frames to
-// the captured stack. Initialized lazily on first push.
-thread_local Vector<MarkerScopeFrame, 8> t_marker_scope_stack;
 
 MarkerCollector::MarkerCollector()
 {
@@ -375,10 +371,10 @@ void marker_thread_unregister()
     c->unregister_thread(marker_current_tid());
 }
 
-// MarkerScope: pushes/pops the marker scope stack and emits an interval marker
-// on destruction. Always active so the call tree always includes scope frames
-// even when the collector hasn't been created yet (the push/pop is just a
-// thread-local vector op; the interval-marker emit is gated by the collector).
+// MarkerScope: combined label + interval marker. Pushes a frame onto the
+// calling thread's FixedProfilingStack for the lifetime of the scope, and
+// emits an interval marker on destruction. Equivalent to pairing
+// PROFILER_LABEL with MARKER_INTERVAL in one RAII helper.
 MarkerScope::MarkerScope(StringView name, StringView schema_type, MarkerCategory category)
     : m_name(name)
     , m_schema_type(schema_type)
@@ -386,7 +382,7 @@ MarkerScope::MarkerScope(StringView name, StringView schema_type, MarkerCategory
     , m_start(MonotonicTime::now())
     , m_active(true)
 {
-    t_marker_scope_stack.append({ name, category });
+    ensure_profiler_state().profiling_stack.push(name, category);
 }
 
 MarkerScope::MarkerScope(StringView name, StringView schema_type, MarkerCategory category, Vector<MarkerField, 4> fields)
@@ -397,16 +393,15 @@ MarkerScope::MarkerScope(StringView name, StringView schema_type, MarkerCategory
     , m_fields(move(fields))
     , m_active(true)
 {
-    t_marker_scope_stack.append({ name, category });
+    ensure_profiler_state().profiling_stack.push(name, category);
 }
 
 MarkerScope::~MarkerScope()
 {
     if (!m_active)
         return;
-    if (!t_marker_scope_stack.is_empty())
-        t_marker_scope_stack.take_last();
-    // Also emit a regular interval marker so the marker chart shows it.
+    if (auto* state = t_profiler_state)
+        state->profiling_stack.pop();
     if (g_marker_collector) [[unlikely]]
         marker_do_add_interval(m_name, m_schema_type, m_category, m_start, move(m_fields));
 }

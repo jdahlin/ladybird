@@ -22,6 +22,7 @@
 #include <AK/Time.h>
 #include <AK/Utf8View.h>
 #include <LibCore/MarkerCollector.h>
+#include <LibCore/Profiler/Label.h>
 #include <LibCore/Timer.h>
 #include <LibGC/RootVector.h>
 #include <LibHTTP/Cookie/Cookie.h>
@@ -1535,7 +1536,7 @@ void Document::update_layout(UpdateLayoutReason reason)
     auto timer = Core::ElapsedTimer::start_new(Core::TimerType::Precise);
 
     if (needs_layout_tree_rebuild) {
-        MARKER_SCOPE("Build layout tree"sv, "Layout"sv, Core::MarkerCategory::Layout);
+        PROFILER_LABEL("Build layout tree"sv, Core::MarkerCategory::Layout);
         Layout::TreeBuilder tree_builder;
         m_layout_root = as<Layout::Viewport>(*tree_builder.build(*this));
 
@@ -1603,7 +1604,7 @@ void Document::update_layout(UpdateLayoutReason reason)
             Layout::AvailableSize::make_definite(viewport_rect.width()),
             Layout::AvailableSize::make_definite(viewport_rect.height()));
 
-        MARKER_SCOPE("Run formatting context"sv, "Layout"sv, Core::MarkerCategory::Layout);
+        PROFILER_LABEL("Run formatting context"sv, Core::MarkerCategory::Layout);
         if (m_layout_root->first_child() && m_layout_root->first_child()->is_svg_svg_box()) {
             // NOTE: If we are laying out a standalone SVG document, we give it some special treatment:
             //       The root <svg> container gets the same size as the viewport,
@@ -1790,7 +1791,7 @@ void Document::update_style()
 
     if (m_needs_invalidation_of_elements_affected_by_has) {
         m_needs_invalidation_of_elements_affected_by_has = false;
-        MARKER_SCOPE(":has() invalidation"sv, "Style"sv, Core::MarkerCategory::Style);
+        PROFILER_LABEL(":has() invalidation"sv, Core::MarkerCategory::Style);
         style_scope().invalidate_style_of_elements_affected_by_has();
         for_each_shadow_root([&](auto& shadow_root) {
             shadow_root.style_scope().invalidate_style_of_elements_affected_by_has();
@@ -1801,7 +1802,7 @@ void Document::update_style()
         return;
 
     {
-        MARKER_SCOPE("Style invalidation"sv, "Style"sv, Core::MarkerCategory::Style);
+        PROFILER_LABEL("Style invalidation"sv, Core::MarkerCategory::Style);
         m_style_invalidator->invalidate(*this);
     }
 
@@ -1813,7 +1814,7 @@ void Document::update_style()
     style_computer().set_viewport_rect({}, viewport_rect());
 
     {
-        MARKER_SCOPE("Evaluate media rules"sv, "Style"sv, Core::MarkerCategory::Style);
+        PROFILER_LABEL("Evaluate media rules"sv, Core::MarkerCategory::Style);
         evaluate_media_rules();
     }
 
@@ -1823,7 +1824,7 @@ void Document::update_style()
     build_registered_properties_cache();
 
     {
-        MARKER_SCOPE("Recompute styles"sv, "Style"sv, Core::MarkerCategory::Style);
+        PROFILER_LABEL("Recompute styles"sv, Core::MarkerCategory::Style);
         auto invalidation = update_style_recursively(*this, style_computer(), false, false, false);
 
         if (!invalidation.is_none())

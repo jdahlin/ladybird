@@ -13,6 +13,7 @@ set(SOURCES
     File.cpp
     MappedFile.cpp
     MarkerCollector.cpp
+    Profiler/Label.cpp
     MimeData.cpp
     Notifier.cpp
     ReportTime.cpp

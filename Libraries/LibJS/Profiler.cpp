@@ -5,6 +5,7 @@
  */
 
 #include <AK/Time.h>
+#include <LibCore/Profiler/Label.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Profiler.h>
 #include <LibJS/Runtime/VM.h>
@@ -160,37 +161,30 @@ void Profiler::capture_frames(RawSample& tick, Optional<u32> leaf_program_counte
         frame.marker_name_len = 0;
     }
 
-    // Append marker scope frames AFTER JS frames so they end up at high indices
-    // and become the OUTERMOST callers (bottom of the call tree). They survive
-    // even when JS isn't running — critical because much of the work we want to
-    // attribute (Layout, Style, Paint) happens in C++ with no JS frames active.
+    // Append label frames from the FixedProfilingStack AFTER JS frames so
+    // they end up at high indices and become the OUTERMOST callers (root of
+    // the call tree). They survive even when JS isn't running — critical
+    // because Layout/Style/Paint happen in C++ with no JS frames active.
     //
-    // Reading t_marker_scope_stack from a signal handler is safe because:
-    //   - It's thread-local and we're on the JS thread
-    //   - The vector grows linearly via push_back/take_last (no shuffling)
-    //   - Walking up to current size is consistent with what was pushed before
-    //     the signal arrived
-    //
-    // Iterate the scope stack in reverse so the OUTERMOST scope (the one pushed
-    // first, at index 0) ends up at the highest frame index (processed first by
-    // intern_stack_trace, becoming the root of the call tree).
-    auto const& scope_stack = Core::t_marker_scope_stack;
-    auto const scope_count = scope_stack.size();
-    for (ssize_t i = 0; i < static_cast<ssize_t>(scope_count) && frame_count < MAX_STACK_DEPTH; ++i) {
-        // Store in reverse: scope_stack[0] (outermost) goes last, becomes high frame index.
-        auto const& scope = scope_stack[scope_count - 1 - i];
-        auto& frame = tick.frames[frame_count++];
-        frame.executable = 0; // sentinel: synthetic marker scope frame
-        // Encode marker category in the low byte of program_counter so the
-        // interner can pick up the category for the synthetic frame.
-        frame.program_counter = static_cast<u32>(to_underlying(scope.category));
-        // Store the raw string pointer + length. The marker name MUST be a
-        // string literal so this pointer outlives the scope. We cannot allocate
-        // here (signal handler) — the FlyString conversion happens later in
-        // process_raw_samples().
-        frame.name = Utf16FlyString {};
-        frame.marker_name_ptr = scope.name.characters_without_null_termination();
-        frame.marker_name_len = static_cast<u32>(scope.name.length());
+    // Reading the fixed stack from a signal handler is safe: the owning
+    // thread is the only writer, we acquire-load the size, and frames
+    // below that size are guaranteed to have been fully written before the
+    // size store was released.
+    if (auto* state = Core::t_profiler_state) {
+        auto const& stack = state->profiling_stack;
+        auto const scope_count = stack.size();
+        for (u32 i = 0; i < scope_count && frame_count < MAX_STACK_DEPTH; ++i) {
+            // Iterate so scope_stack[0] (outermost) ends up at the highest
+            // frame index — intern_stack_trace processes high indices first
+            // and makes them the root of the call tree.
+            auto const& scope = stack.at(scope_count - 1 - i);
+            auto& frame = tick.frames[frame_count++];
+            frame.executable = 0;
+            frame.program_counter = static_cast<u32>(to_underlying(scope.category));
+            frame.name = Utf16FlyString {};
+            frame.marker_name_ptr = scope.name.characters_without_null_termination();
+            frame.marker_name_len = static_cast<u32>(scope.name.length());
+        }
     }
 
     tick.frame_count = frame_count;
