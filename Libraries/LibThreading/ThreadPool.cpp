@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibCore/MarkerCollector.h>
+#include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibThreading/ThreadPool.h>
 
 static constexpr size_t THREAD_COUNT = 4;
@@ -34,7 +34,7 @@ ThreadPool::ThreadPool()
 intptr_t ThreadPool::worker_thread_func(size_t worker_index)
 {
     auto thread_name = MUST(String::formatted("ThreadPool#{}", worker_index));
-    Core::marker_thread_register(thread_name.bytes_as_string_view());
+    Core::profiler_thread_register(thread_name.bytes_as_string_view());
 
     while (true) {
         Function<void()> work;

@@ -10,6 +10,8 @@
 #include <AK/JsonObjectSerializer.h>
 #include <AK/JsonValue.h>
 #include <LibCore/MarkerCollector.h>
+#include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/Timer.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/ShareableBitmap.h>
@@ -885,11 +887,14 @@ void PageClient::start_profiling(u32 interval_us)
         m_marker_collector = nullptr;
     }
 
+    Core::profiler_reset_thread_registry();
+    Core::profiler_reset_counter_registry();
     m_marker_collector = make<Core::MarkerCollector>();
-    if (auto const* env = getenv("LADYBIRD_MARKER_DEBUG"); env && env[0] == '1')
+    if (auto const* env = getenv("LADYBIRD_MARKER_VERBOSE"); env && env[0] == '1')
         m_marker_collector->set_debug(true);
-    m_marker_collector->set_process_name("WebContent"_string);
-    m_marker_collector->set_process_type("content"_string);
+    Core::profiler_set_process_name("WebContent"_string);
+    Core::profiler_set_process_type("content"_string);
+    Core::profiler_thread_register("Main"sv);
     Core::g_marker_collector = m_marker_collector.ptr();
 
     // Pre-warm the thread pool so worker threads register their names with the
@@ -909,10 +914,7 @@ void PageClient::start_profiling(u32 interval_us)
         });
 
     // Sample memory and CPU periodically. Counter graphs at the top of the timeline.
-    m_counter_sample_timer = Core::Timer::create_repeating(100, [collector = m_marker_collector.ptr()] {
-        if (!collector)
-            return;
-
+    m_counter_sample_timer = Core::Timer::create_repeating(100, [] {
         // Process-wide memory: read VmRSS from /proc/self/status. This is the
         // CURRENT resident set size (in bytes). getrusage's ru_maxrss is the
         // peak — not what we want for a graph showing memory over time.
@@ -929,7 +931,7 @@ void PageClient::start_profiling(u32 interval_us)
                     if (space.has_value()) {
                         auto num_part = rest.substring_view(0, *space);
                         if (auto kb = num_part.to_number<u64>(); kb.has_value()) {
-                            collector->add_counter_sample("memory"sv, "Memory"sv, "Resident set size"sv,
+                            Core::profiler_add_counter_sample("memory"sv, "Memory"sv, "Resident set size"sv,
                                 static_cast<i64>(kb.value()) * 1024, 0);
                         }
                     }
@@ -943,14 +945,14 @@ void PageClient::start_profiling(u32 interval_us)
         if (getrusage(RUSAGE_SELF, &usage) == 0) {
             i64 cpu_us = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000000
                 + usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
-            collector->add_counter_sample("processCPU"sv, "CPU"sv, "Process CPU usage"sv,
+            Core::profiler_add_counter_sample("processCPU"sv, "CPU"sv, "Process CPU usage"sv,
                 cpu_us / 1000, 0);
         }
 
         // Per-thread CPU from /proc/self/task/<tid>/stat (Linux-specific).
         // This gives us a CPU usage graph per OS thread, even non-JS ones, even though
         // we don't have stack samples for those threads.
-        for (auto const& [tid, info] : collector->threads()) {
+        for (auto const& [tid, info] : Core::profiler_threads()) {
             auto path = MUST(String::formatted("/proc/self/task/{}/stat", tid));
             auto file_or_error = Core::File::open(path, Core::File::OpenMode::Read);
             if (file_or_error.is_error())
@@ -979,7 +981,7 @@ void PageClient::start_profiling(u32 interval_us)
             auto cpu_ms = static_cast<i64>((clock_ticks * 1000) / ticks_per_sec);
 
             auto counter_name = MUST(String::formatted("threadCPU.{}", info.name));
-            collector->add_counter_sample(counter_name.bytes_as_string_view(),
+            Core::profiler_add_counter_sample(counter_name.bytes_as_string_view(),
                 "CPU"sv, "Thread CPU usage"sv, cpu_ms, 0);
         }
     });

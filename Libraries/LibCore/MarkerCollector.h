@@ -91,26 +91,6 @@ struct MarkerSchema {
     StringView chart_label {};
 };
 
-struct ThreadInfo {
-    String name;
-    MonotonicTime register_time;
-};
-
-// Counter sample — a single (time, value) point.
-// Used for memory/CPU/etc. graphs at the top of the timeline.
-struct CounterSample {
-    MonotonicTime time;
-    i64 count;  // total at this point in time (or delta — depends on counter)
-    i64 number; // number of operations since previous sample (e.g., allocations)
-};
-
-struct CounterSeries {
-    String name;     // "malloc", "processCPU", "threadCPU.<name>", etc.
-    String category; // "Memory", "CPU"
-    String description;
-    Vector<CounterSample> samples;
-};
-
 class CORE_API MarkerCollector {
 public:
     MarkerCollector();
@@ -125,23 +105,6 @@ public:
     void add_marker(Marker);
     void register_schema(MarkerSchema);
 
-    // Process metadata (set once at construction by the owner)
-    void set_process_name(String name) { m_process_name = move(name); }
-    void set_process_type(String type) { m_process_type = move(type); }
-    String const& process_name() const { return m_process_name; }
-    String const& process_type() const { return m_process_type; }
-
-    // Thread registration. Multiple threads may add markers; each should
-    // register itself once at startup so its name appears in the export.
-    void register_thread(u64 tid, String name);
-    void unregister_thread(u64 tid);
-    HashMap<u64, ThreadInfo> const& threads() const { return m_threads; }
-
-    // Counter sampling. Each named series (e.g., "malloc", "processCPU") is a
-    // graph row at the top of the profile timeline.
-    void add_counter_sample(StringView name, StringView category, StringView description, i64 count, i64 number = 0);
-    HashMap<String, CounterSeries> const& counters() const { return m_counters; }
-
     Vector<Marker> const& markers() const { return m_markers; }
     Vector<MarkerSchema> const& schemas() const { return m_schemas; }
 
@@ -153,11 +116,7 @@ public:
 private:
     Vector<Marker> m_markers;
     Vector<MarkerSchema> m_schemas;
-    HashMap<u64, ThreadInfo> m_threads;
-    HashMap<String, CounterSeries> m_counters;
     StackCaptureFn m_stack_capture;
-    String m_process_name;
-    String m_process_type;
     bool m_debug { false };
 };
 
@@ -185,11 +144,6 @@ CORE_API void marker_do_add_interval_start(MarkerString name, StringView type, M
 CORE_API void marker_do_add_interval_end(MarkerString name, StringView type, MarkerCategory category,
     Vector<MarkerField, 4> fields);
 CORE_API void marker_do_add_text(MarkerString name, MarkerCategory category, MarkerString text);
-
-// Register the calling thread under a human-readable name. Cheap no-op if no
-// collector is active. Safe to call multiple times (re-registers the name).
-CORE_API void marker_thread_register(StringView name);
-CORE_API void marker_thread_unregister();
 
 // RAII marker scope. Pushes a frame onto the thread-local marker scope stack on
 // construction; pops it and emits an interval marker on destruction. Safe to use
@@ -280,12 +234,6 @@ CORE_API bool ladybird_marker_collector_is_active();
     do {                                                      \
         if (::Core::g_marker_collector) [[unlikely]]          \
             ::Core::marker_do_add_text(NAME, CATEGORY, TEXT); \
-    } while (0)
-
-#define MARKER_THREAD_REGISTER(NAME)                 \
-    do {                                             \
-        if (::Core::g_marker_collector) [[unlikely]] \
-            ::Core::marker_thread_register(NAME);    \
     } while (0)
 
 // MARKER_SCOPE — RAII wrapper that pushes a frame onto the marker scope stack

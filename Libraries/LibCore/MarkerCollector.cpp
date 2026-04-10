@@ -7,6 +7,7 @@
 #include <AK/StringBuilder.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/Label.h>
+#include <LibCore/Profiler/ThreadRegistry.h>
 
 namespace Core {
 
@@ -16,12 +17,6 @@ MarkerCollector::MarkerCollector()
 {
     m_markers.ensure_capacity(4096);
     m_schemas.ensure_capacity(8);
-
-    // Auto-register the constructing thread as "GeckoMain". Profiles created from
-    // js.cpp / PageClient::start_profiling are constructed on the JS main thread,
-    // which is the thread the Profiler samples and the thread most markers come from.
-    // This ensures the main thread always has the right name in the export.
-    register_thread(marker_current_tid(), "GeckoMain"_string);
 
     register_schema({ "Text"sv,
         { { "name"sv, "Details"sv, MarkerSchema::Field::Format::String, true } },
@@ -220,16 +215,6 @@ static StringView phase_name(MarkerPhase phase)
     VERIFY_NOT_REACHED();
 }
 
-void MarkerCollector::register_thread(u64 tid, String name)
-{
-    m_threads.set(tid, ThreadInfo { move(name), MonotonicTime::now() });
-}
-
-void MarkerCollector::unregister_thread(u64 tid)
-{
-    m_threads.remove(tid);
-}
-
 static StringView marker_string_view(MarkerString const& s)
 {
     return s.visit(
@@ -281,22 +266,6 @@ void MarkerCollector::register_schema(MarkerSchema schema)
 void MarkerCollector::clear()
 {
     m_markers.clear_with_capacity();
-}
-
-void MarkerCollector::add_counter_sample(StringView name, StringView category, StringView description, i64 count, i64 number)
-{
-    auto name_string = MUST(String::from_utf8(name));
-    auto it = m_counters.find(name_string);
-    if (it == m_counters.end()) {
-        CounterSeries series;
-        series.name = name_string;
-        series.category = MUST(String::from_utf8(category));
-        series.description = MUST(String::from_utf8(description));
-        series.samples.append({ MonotonicTime::now(), count, number });
-        m_counters.set(move(name_string), move(series));
-    } else {
-        it->value.samples.append({ MonotonicTime::now(), count, number });
-    }
 }
 
 // Implementation entry points — called only from macros that have already
@@ -355,22 +324,6 @@ void marker_do_add_text(MarkerString name, MarkerCategory category, MarkerString
     marker_do_add_instant(move(name), "Text"sv, category, { { "name"sv, move(text) } });
 }
 
-void marker_thread_register(StringView name)
-{
-    auto* c = g_marker_collector;
-    if (!c)
-        return;
-    c->register_thread(marker_current_tid(), MUST(String::from_utf8(name)));
-}
-
-void marker_thread_unregister()
-{
-    auto* c = g_marker_collector;
-    if (!c)
-        return;
-    c->unregister_thread(marker_current_tid());
-}
-
 // MarkerScope: combined label + interval marker. Pushes a frame onto the
 // calling thread's FixedProfilingStack for the lifetime of the scope, and
 // emits an interval marker on destruction. Equivalent to pairing
@@ -414,19 +367,12 @@ extern "C" {
 
 void ladybird_marker_thread_register(char const* name, size_t name_length)
 {
-    auto* c = ::Core::g_marker_collector;
-    if (!c)
-        return;
-    c->register_thread(::Core::marker_current_tid(),
-        MUST(String::from_utf8(StringView { name, name_length })));
+    ::Core::profiler_thread_register(StringView { name, name_length });
 }
 
 void ladybird_marker_thread_unregister()
 {
-    auto* c = ::Core::g_marker_collector;
-    if (!c)
-        return;
-    c->unregister_thread(::Core::marker_current_tid());
+    ::Core::profiler_thread_unregister();
 }
 
 bool ladybird_marker_collector_is_active()

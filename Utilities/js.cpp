@@ -13,6 +13,8 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/MarkerCollector.h>
+#include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/StandardPaths.h>
 #include <LibJS/Bytecode/Interpreter.h>
 #include <LibJS/Console.h>
@@ -957,13 +959,15 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         OwnPtr<Core::MarkerCollector> marker_collector;
         if (!profile_output.is_empty()) {
             int interval_us = max(static_cast<int>(profile_interval_ms * 1000), 100);
+            Core::profiler_reset_thread_registry();
+            Core::profiler_reset_counter_registry();
             marker_collector = make<Core::MarkerCollector>();
-            if (auto const* env = getenv("LADYBIRD_MARKER_DEBUG"); env && env[0] == '1')
+            if (auto const* env = getenv("LADYBIRD_MARKER_VERBOSE"); env && env[0] == '1')
                 marker_collector->set_debug(true);
-            marker_collector->set_process_name("js"_string);
-            marker_collector->set_process_type("default"_string);
+            Core::profiler_set_process_name("js"_string);
+            Core::profiler_set_process_type("default"_string);
             Core::g_marker_collector = marker_collector.ptr();
-            MARKER_THREAD_REGISTER("GeckoMain"sv);
+            Core::profiler_thread_register("Main"sv);
             profiler = make<JS::Profiler>(*g_vm, interval_us);
             g_vm->set_profiler(profiler.ptr());
             profiler->start();

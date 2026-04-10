@@ -13,7 +13,9 @@ set(SOURCES
     File.cpp
     MappedFile.cpp
     MarkerCollector.cpp
+    Profiler/CounterRegistry.cpp
     Profiler/Label.cpp
+    Profiler/ThreadRegistry.cpp
     MimeData.cpp
     Notifier.cpp
     ReportTime.cpp

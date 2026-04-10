@@ -13,6 +13,8 @@
 #include <AK/JsonObject.h>
 #include <AK/StringBuilder.h>
 #include <LibCore/MarkerCollector.h>
+#include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/System.h>
 #include <LibJS/GeckoProfileWriter.h>
 #include <LibJS/Profiler.h>
@@ -257,8 +259,9 @@ static JsonObject build_meta(Profiler const& profiler, MarkerCollector const* co
 #endif
     meta.set("product"sv, "Ladybird"sv);
     meta.set("oscpu"sv, os_name);
-    if (collector && !collector->process_name().is_empty())
-        meta.set("processName"sv, collector->process_name());
+    (void)collector;
+    if (!Core::profiler_process_name().is_empty())
+        meta.set("processName"sv, Core::profiler_process_name());
 
     // profilingStartTime/EndTime are RELATIVE to startTime (i.e. ms since profile began).
     // profiler.firefox.com uses these for the visible timeline range. Without them the
@@ -531,15 +534,19 @@ static JsonObject build_thread(Profiler const& profiler, MarkerCollector const* 
     auto markers = build_markers(profiler, collector, tid, include_network, string_table);
 
     JsonObject thread;
-    thread.set("name"sv, thread_name);
+    // profiler.firefox.com treats "GeckoMain" as a special JS-capable main
+    // thread. We store the real thread name ("Main") internally and translate
+    // on export so the gecko format sees what it expects.
+    StringView exported_name = thread_name == "Main"sv ? "GeckoMain"sv : thread_name;
+    thread.set("name"sv, exported_name);
     // processType: "default" (parent), "tab" (content renderer), "plugin", etc.
-    auto process_type = (collector && !collector->process_type().is_empty())
-        ? collector->process_type().bytes_as_string_view()
+    auto process_type = !Core::profiler_process_type().is_empty()
+        ? Core::profiler_process_type().bytes_as_string_view()
         : "default"sv;
     thread.set("processType"sv, process_type);
     // processName groups threads visually under one process row.
-    if (collector && !collector->process_name().is_empty())
-        thread.set("processName"sv, collector->process_name());
+    if (!Core::profiler_process_name().is_empty())
+        thread.set("processName"sv, Core::profiler_process_name());
     thread.set("tid"sv, tid);
     thread.set("pid"sv, Core::System::getpid());
     // registerTime: ms relative to meta.startTime when this thread was created.
@@ -568,12 +575,12 @@ static JsonArray build_threads(Profiler const& profiler, MarkerCollector const* 
     JsonArray threads;
 
     auto main_tid = profiler.os_tid();
-    // Use the registered name from the collector, falling back to "GeckoMain".
-    StringView main_name = "GeckoMain"sv;
-    if (collector) {
-        if (auto it = collector->threads().find(main_tid); it != collector->threads().end())
-            main_name = it->value.name.bytes_as_string_view();
-    }
+    auto const& registry = Core::profiler_threads();
+    // Use the registered name, falling back to "Main" (gets translated to
+    // "GeckoMain" inside build_thread).
+    StringView main_name = "Main"sv;
+    if (auto it = registry.find(main_tid); it != registry.end())
+        main_name = it->value.name.bytes_as_string_view();
     // Network markers don't go on the main thread anymore — they're owned by the
     // synthetic RequestServer thread emitted below. Pass include_network=false here.
     threads.must_append(build_thread(profiler, collector, main_tid, main_name,
@@ -592,7 +599,7 @@ static JsonArray build_threads(Profiler const& profiler, MarkerCollector const* 
         seen.set(tid);
         StringView name;
         String fallback_name;
-        if (auto it = collector->threads().find(tid); it != collector->threads().end()) {
+        if (auto it = registry.find(tid); it != registry.end()) {
             name = it->value.name.bytes_as_string_view();
         } else {
             fallback_name = MUST(String::formatted("Thread {}", tid));
@@ -601,7 +608,7 @@ static JsonArray build_threads(Profiler const& profiler, MarkerCollector const* 
         threads.must_append(build_thread(profiler, collector, tid, name, /* is_main_thread = */ false));
     };
 
-    for (auto const& [tid, _] : collector->threads())
+    for (auto const& [tid, _] : registry)
         emit_thread_for_tid(tid);
     for (auto const& m : collector->markers())
         emit_thread_for_tid(m.tid);
@@ -624,8 +631,7 @@ static JsonObject build_source_table()
 static JsonArray build_counters(Profiler const& profiler, MarkerCollector const* collector)
 {
     JsonArray counters;
-    if (!collector)
-        return counters;
+    (void)collector;
 
     auto profiler_start_monotonic = MonotonicTime::now() - AK::Duration::from_milliseconds(static_cast<i64>(profiler.elapsed_ms_since_start()));
     auto to_relative_ms = [&](MonotonicTime t) -> double {
@@ -633,7 +639,7 @@ static JsonArray build_counters(Profiler const& profiler, MarkerCollector const*
         return static_cast<double>(max(elapsed.to_microseconds(), static_cast<i64>(0))) / 1000.0;
     };
 
-    for (auto const& [_, series] : collector->counters()) {
+    for (auto const& [_, series] : Core::profiler_counters()) {
         JsonObject counter;
         counter.set("name"sv, series.name);
         counter.set("category"sv, series.category);
