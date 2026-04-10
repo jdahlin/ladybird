@@ -11,6 +11,7 @@
 #include <AK/JsonValue.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/ProfilerSession.h>
 #include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/Timer.h>
 #include <LibGfx/Bitmap.h>
@@ -882,20 +883,15 @@ void PageClient::start_profiling(u32 interval_us)
         vm.set_profiler(nullptr);
         m_profiler = nullptr;
     }
-    if (m_marker_collector) {
-        Core::g_marker_collector = nullptr;
-        m_marker_collector = nullptr;
-    }
+    m_profiler_session = nullptr;
 
     Core::profiler_reset_thread_registry();
-    Core::profiler_reset_counter_registry();
-    m_marker_collector = make<Core::MarkerCollector>();
+    m_profiler_session = make<Core::ProfilerSession>();
     if (auto const* env = getenv("LADYBIRD_MARKER_VERBOSE"); env && env[0] == '1')
-        m_marker_collector->set_debug(true);
+        m_profiler_session->markers().set_debug(true);
     Core::profiler_set_process_name("WebContent"_string);
     Core::profiler_set_process_type("content"_string);
     Core::profiler_thread_register("Main"sv);
-    Core::g_marker_collector = m_marker_collector.ptr();
 
     // Pre-warm the thread pool so worker threads register their names with the
     // collector now (instead of lazily on first use, which may be after profiling stops).
@@ -908,7 +904,7 @@ void PageClient::start_profiling(u32 interval_us)
     // Connect the profiler to the marker collector so each marker captures
     // the JS call stack at emit time. This populates the "cause" field on
     // markers in profiler.firefox.com.
-    m_marker_collector->set_stack_capture(
+    m_profiler_session->markers().set_stack_capture(
         [profiler = m_profiler.ptr()](Vector<Core::MarkerStackFrame, 8>& out) {
             profiler->capture_marker_stack(out);
         });
@@ -1002,11 +998,9 @@ void PageClient::stop_profiling()
         m_counter_sample_timer = nullptr;
     }
 
-    auto json = JS::write_gecko_profile(*m_profiler, m_marker_collector.ptr());
+    auto json = JS::write_gecko_profile(*m_profiler, &m_profiler_session->markers());
     m_profiler = nullptr;
-
-    Core::g_marker_collector = nullptr;
-    m_marker_collector = nullptr;
+    m_profiler_session = nullptr;
 
     client().async_did_finish_profiling(m_id, move(json));
 }

@@ -15,6 +15,7 @@ set(SOURCES
     MarkerCollector.cpp
     Profiler/CounterRegistry.cpp
     Profiler/Label.cpp
+    Profiler/ProfilerSession.cpp
     Profiler/ThreadRegistry.cpp
     MimeData.cpp
     Notifier.cpp

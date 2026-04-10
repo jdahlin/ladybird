@@ -14,6 +14,7 @@
 #include <LibCore/ConfigFile.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/ProfilerSession.h>
 #include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/StandardPaths.h>
 #include <LibJS/Bytecode/Interpreter.h>
@@ -956,17 +957,15 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         // We resolve modules as if it is the first file
 
         OwnPtr<JS::Profiler> profiler;
-        OwnPtr<Core::MarkerCollector> marker_collector;
+        OwnPtr<Core::ProfilerSession> profiler_session;
         if (!profile_output.is_empty()) {
             int interval_us = max(static_cast<int>(profile_interval_ms * 1000), 100);
             Core::profiler_reset_thread_registry();
-            Core::profiler_reset_counter_registry();
-            marker_collector = make<Core::MarkerCollector>();
+            profiler_session = make<Core::ProfilerSession>();
             if (auto const* env = getenv("LADYBIRD_MARKER_VERBOSE"); env && env[0] == '1')
-                marker_collector->set_debug(true);
+                profiler_session->markers().set_debug(true);
             Core::profiler_set_process_name("js"_string);
             Core::profiler_set_process_type("default"_string);
-            Core::g_marker_collector = marker_collector.ptr();
             Core::profiler_thread_register("Main"sv);
             profiler = make<JS::Profiler>(*g_vm, interval_us);
             g_vm->set_profiler(profiler.ptr());
@@ -974,7 +973,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
             // Connect the profiler to the marker collector so each marker captures
             // the JS call stack at emit time.
-            marker_collector->set_stack_capture(
+            profiler_session->markers().set_stack_capture(
                 [p = profiler.ptr()](Vector<Core::MarkerStackFrame, 8>& out) {
                     p->capture_marker_stack(out);
                 });
@@ -986,8 +985,8 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         if (profiler) {
             profiler->stop();
             g_vm->set_profiler(nullptr);
-            auto json = JS::write_gecko_profile(*profiler, marker_collector.ptr());
-            Core::g_marker_collector = nullptr;
+            auto json = JS::write_gecko_profile(*profiler, &profiler_session->markers());
+            profiler_session = nullptr;
             auto file = TRY(Core::File::open(profile_output, Core::File::OpenMode::Write));
             TRY(file->write_until_depleted(json.bytes()));
             outln("Profile written to {}", profile_output);

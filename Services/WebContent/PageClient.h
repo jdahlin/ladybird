@@ -25,7 +25,7 @@
 
 namespace Core {
 
-class MarkerCollector;
+class ProfilerSession;
 
 }
 
@@ -247,7 +247,7 @@ private:
     u64 m_devtools_client_count { 0 };
 
     OwnPtr<JS::Profiler> m_profiler;
-    OwnPtr<Core::MarkerCollector> m_marker_collector;
+    OwnPtr<Core::ProfilerSession> m_profiler_session;
     RefPtr<Core::Timer> m_counter_sample_timer;
 
     struct PendingNetworkRequest {
