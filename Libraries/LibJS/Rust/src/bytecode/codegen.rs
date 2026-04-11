@@ -9471,8 +9471,8 @@ fn member_expression_dotted_name(expression: &Expression) -> Option<Utf16String>
             let base = member_expression_dotted_name(&data.object);
             if data.computed {
                 // Bracket access: build "base[key]"
-                let key_name = match &data.property.inner {
-                    ExpressionKind::Identifier(ident) => Some(ident.name.clone()),
+                let key_name: Option<Utf16String> = match &data.property.inner {
+                    ExpressionKind::Identifier(ident) => Some(ident.name.to_utf16_string()),
                     ExpressionKind::StringLiteral(s) => Some((**s).clone()),
                     ExpressionKind::NumericLiteral(n) => {
                         let s = format!("{n}");
@@ -9489,19 +9489,19 @@ fn member_expression_dotted_name(expression: &Expression) -> Option<Utf16String>
                 Some(result)
             } else {
                 // Dot access: build "base.prop"
-                let prop = match &data.property.inner {
-                    ExpressionKind::Identifier(ident) => &ident.name,
+                let prop: Utf16String = match &data.property.inner {
+                    ExpressionKind::Identifier(ident) => ident.name.to_utf16_string(),
                     _ => return base,
                 };
                 let mut result = base.unwrap_or_default();
                 if !result.is_empty() {
                     result.0.extend_from_slice(utf16!("."));
                 }
-                result.0.extend_from_slice(prop);
+                result.0.extend_from_slice(&prop);
                 Some(result)
             }
         }
-        ExpressionKind::Identifier(ident) => Some(ident.name.clone()),
+        ExpressionKind::Identifier(ident) => Some(ident.name.to_utf16_string()),
         ExpressionKind::This => Some(Utf16String(utf16!("this").to_vec())),
         _ => None,
     }
