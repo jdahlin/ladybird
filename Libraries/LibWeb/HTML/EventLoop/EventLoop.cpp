@@ -266,13 +266,27 @@ void EventLoop::process()
         m_currently_running_task = oldest_task.ptr();
 
         {
+            // Tasks are emitted as marker-chart-only intervals — NOT as
+            // pseudo-frames on the unified profiling stack. When a task
+            // synchronously spins the event loop (HTML parser blocking
+            // on a script load, sync XHR, microtask checkpoints), nested
+            // tasks would otherwise pile up in the call tree as nested
+            // "Task: Networking inside Parse HTML inside Task: Navigation"
+            // pseudo-frames, which is misleading: the parser didn't call
+            // networking, the event loop just picked up another task
+            // while the parser was suspended. Firefox treats tasks as
+            // marker chart events, not call stack scopes — code phases
+            // (Layout/Style/Paint/Parse HTML) stay as PROFILER_LABEL
+            // scopes; tasks are timeline markers.
             auto source_name = task_source_marker_name(oldest_task->source());
             auto source_category = task_source_marker_category(oldest_task->source());
-            MARKER_SCOPE_FIELDS(source_name, "Task"sv, source_category,
-                { { "source"sv, source_name } });
+            MARKER_START_TIME(task_start);
 
             // 6. Perform oldestTask's steps.
             oldest_task->execute();
+
+            MARKER_INTERVAL(source_name, "Task"sv, source_category, task_start,
+                { { "source"sv, source_name } });
         }
 
         // 7. Set the event loop's currently running task back to null.
