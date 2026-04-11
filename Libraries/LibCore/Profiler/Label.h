@@ -12,6 +12,7 @@
 #include <AK/Types.h>
 #include <LibCore/Export.h>
 #include <LibCore/MarkerCategory.h>
+#include <LibCore/Profiler/SamplingHandle.h>
 
 namespace Core {
 
@@ -80,9 +81,12 @@ private:
 // session. Created lazily on first profiler op from the owning thread.
 struct ThreadProfilerState {
     FixedProfilingStack profiling_stack;
-    // Placeholder for future SamplingHandle* — unused in step 1. Declared
-    // here so the layout is final.
-    Atomic<void*> active_sampling_handle { nullptr };
+    // Set by ProfilerSession::start() with release ordering before the
+    // timer thread can deliver a signal; cleared on session stop after
+    // signals are drained. The platform sampler's signal handler reads
+    // this with acquire ordering and dispatches through it — no further
+    // lookups, no locks, no allocation.
+    Atomic<SamplingHandle*> active_sampling_handle { nullptr };
 };
 
 // Thread-local pointer to the owning thread's profiler state. Null until

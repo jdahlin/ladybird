@@ -50,7 +50,7 @@ void Profiler::start()
             if (thread_suspend(mach_thread) != KERN_SUCCESS)
                 continue;
             if (auto pc = read_program_counter_from_suspended_thread(mach_thread); pc.has_value())
-                capture_sample(pc);
+                do_capture_sample(pc);
             thread_resume(mach_thread);
         }
         return 0;

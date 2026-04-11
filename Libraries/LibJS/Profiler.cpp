@@ -38,7 +38,7 @@ void Profiler::sample_if_needed()
 {
     if (!m_sample_pending.exchange(false, AK::MemoryOrder::memory_order_relaxed))
         return;
-    capture_sample({});
+    do_capture_sample({});
 }
 
 void Profiler::request_sample_for_test()
@@ -189,7 +189,7 @@ void Profiler::capture_frames(RawSample& tick, Optional<u32> leaf_program_counte
     tick.frame_count = frame_count;
 }
 
-void Profiler::capture_sample(Optional<u32> leaf_program_counter)
+void Profiler::do_capture_sample(Optional<u32> leaf_program_counter)
 {
     auto index = m_raw_sample_count.load(AK::MemoryOrder::memory_order_relaxed);
     if (index >= MAX_RAW_SAMPLES || !m_raw_samples)
@@ -199,6 +199,15 @@ void Profiler::capture_sample(Optional<u32> leaf_program_counter)
     tick.time_ms = elapsed_ms_since_start();
     capture_frames(tick, leaf_program_counter);
     m_raw_sample_count.store(index + 1, AK::MemoryOrder::memory_order_relaxed);
+}
+
+void Profiler::capture_sample(Core::ProfiledThread& output, Optional<u32> leaf_program_counter)
+{
+    // The output is driven by set_profiled_thread() today — step 6 wires
+    // it through the SamplingHandle so the platform sampler picks the
+    // target directly. Until then we just verify they agree.
+    VERIFY(&output == m_profiled_thread);
+    do_capture_sample(leaf_program_counter);
 }
 
 void Profiler::process_raw_samples()

@@ -15,6 +15,7 @@
 #include <AK/Vector.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/ProfiledThread.h>
+#include <LibCore/Profiler/StackSampler.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
 #include <LibThreading/Thread.h>
@@ -23,7 +24,7 @@
 
 namespace JS {
 
-class JS_API Profiler {
+class JS_API Profiler : public Core::StackSampler {
 public:
     explicit Profiler(VM&, int interval_us = 1000);
     ~Profiler();
@@ -48,7 +49,7 @@ public:
     void sample_if_needed();
     void request_sample_for_test();
     bool supports_timed_sampling() const;
-    bool needs_bytecode_safe_points() const;
+    virtual bool needs_bytecode_safe_points() const override;
 
     // Forward to the output ProfiledThread when one is set, so callers
     // (gecko exporter, tests) keep reading the sampled state through the
@@ -135,12 +136,19 @@ private:
 
     static void signal_handler(int, siginfo_t*, void*);
 
-    // Async-signal-safe: called from a POSIX signal handler (Linux) or while the JS
-    // thread is Mach-suspended (macOS).  Must not allocate or call non-reentrant
-    // functions — see UnprocessedFrame comment above.
-    // leaf_program_counter: register-derived PC for the topmost frame (macOS path);
-    // absent on the Linux safe-point path, where ctx->program_counter is used instead.
-    void capture_sample(Optional<u32> leaf_program_counter);
+public:
+    // StackSampler interface. In step 5 this simply delegates to the
+    // existing internal path using m_profiled_thread as the output;
+    // step 6 plumbs the output parameter through the raw-sample buffer
+    // so the platform sampler drives writes by this pointer.
+    virtual void capture_sample(Core::ProfiledThread& output, Optional<u32> leaf_program_counter) override;
+
+private:
+    // Async-signal-safe internal entry point — called by the public
+    // override above and by the Linux signal handler / macOS suspend
+    // loop which still reference the JS::Profiler directly in step 5.
+    // Must not allocate or call non-reentrant functions.
+    void do_capture_sample(Optional<u32> leaf_program_counter);
     void reset_state_for_start();
     void reserve_output_tables();
     void allocate_raw_samples();

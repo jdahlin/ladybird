@@ -39,7 +39,7 @@ void Profiler::signal_handler(int, siginfo_t*, void* ucontext)
     auto* profiler = s_active_profiler.load(AK::MemoryOrder::memory_order_relaxed);
     if (profiler) {
         auto pc = read_program_counter_from_ucontext(static_cast<ucontext_t const*>(ucontext));
-        profiler->capture_sample(pc);
+        profiler->do_capture_sample(pc);
     }
 }
 

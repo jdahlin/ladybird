@@ -15,6 +15,7 @@ set(SOURCES
     MarkerCollector.cpp
     Profiler/CounterRegistry.cpp
     Profiler/Label.cpp
+    Profiler/LabelOnlyStackSampler.cpp
     Profiler/ProfiledThread.cpp
     Profiler/ProfilerSession.cpp
     Profiler/ThreadRegistry.cpp
