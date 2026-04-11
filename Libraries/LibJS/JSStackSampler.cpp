@@ -245,8 +245,15 @@ void JSStackSampler::process_raw_samples()
 
     for (u32 i = 0; i < count; ++i) {
         auto const& tick = m_raw_samples[i];
-        if (tick.frame_count == 0 || tick.frame_count > MAX_STACK_DEPTH)
+        if (tick.frame_count > MAX_STACK_DEPTH)
             continue;
+        // Empty-stack samples are kept as IDLE markers (no stack index).
+        // Dropping them would make the activity timeline read 100% busy
+        // even when the thread was waiting in epoll_wait between events.
+        if (tick.frame_count == 0) {
+            m_profiled_thread->samples.append({ tick.time_ms, {} });
+            continue;
+        }
         m_profiled_thread->samples.append({ tick.time_ms, intern_stack_trace(tick) });
     }
 }

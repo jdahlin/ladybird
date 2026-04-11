@@ -14,6 +14,13 @@
 #include <LibCore/Export.h>
 #include <pthread.h>
 
+#if defined(AK_OS_LINUX)
+#    include <sys/syscall.h>
+#    include <unistd.h>
+#elif defined(AK_OS_MACOS)
+#    include <pthread.h>
+#endif
+
 namespace Core {
 
 struct ThreadInfo {
@@ -21,9 +28,21 @@ struct ThreadInfo {
     MonotonicTime register_time;
 };
 
+// Kernel-level thread id used for /proc/self/task/<tid>/* lookups and
+// shown in profiler.firefox.com. NOT the pthread handle returned by
+// pthread_self() — that's a userspace opaque pointer, not a TID, and
+// /proc paths require the real kernel TID.
 ALWAYS_INLINE u64 profiler_current_tid()
 {
+#if defined(AK_OS_LINUX)
+    return static_cast<u64>(::syscall(SYS_gettid));
+#elif defined(AK_OS_MACOS)
+    uint64_t tid = 0;
+    pthread_threadid_np(nullptr, &tid);
+    return tid;
+#else
     return reinterpret_cast<uintptr_t>(pthread_self());
+#endif
 }
 
 // Register the calling thread under the given human-readable name. Cheap

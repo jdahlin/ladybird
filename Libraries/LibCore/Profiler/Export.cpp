@@ -292,7 +292,10 @@ static JsonObject build_samples(ProfiledThread const& thread)
     JsonArray data;
     for (auto const& sample : thread.samples) {
         JsonArray row;
-        row.must_append(sample.stack_index);
+        // Idle samples (no active label or JS frame) emit a null stack
+        // index — profiler.firefox.com renders them as gaps in the
+        // activity timeline instead of as continuous busy time.
+        row.must_append(sample.stack_index.has_value() ? JsonValue(*sample.stack_index) : JsonValue {});
         row.must_append(sample.time_ms);
         row.must_append(0);
         data.must_append(move(row));

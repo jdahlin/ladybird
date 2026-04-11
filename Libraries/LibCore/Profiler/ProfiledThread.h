@@ -33,10 +33,13 @@ struct ProfiledStack {
 };
 
 // One sample = one (time, stack) pair. Index into ProfiledThread::samples
-// corresponds to a row in the gecko `samples` table.
+// corresponds to a row in the gecko `samples` table. A null stack_index
+// means the thread was idle (sampler hit a moment where no JS frames or
+// label scopes were active) — profiler.firefox.com renders these as
+// gaps/white in the activity timeline.
 struct ProfiledSample {
     double time_ms;
-    u32 stack_index;
+    Optional<u32> stack_index;
 };
 
 // Per-session per-thread sampled output state. Lives inside

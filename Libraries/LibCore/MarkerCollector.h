@@ -17,6 +17,7 @@
 #include <AK/Vector.h>
 #include <LibCore/Export.h>
 #include <LibCore/MarkerCategory.h>
+#include <LibCore/Profiler/ThreadRegistry.h>
 #include <pthread.h>
 
 namespace Core {
@@ -124,8 +125,12 @@ private:
 // Single-threaded write per thread; the collector itself takes a lock for cross-thread adds.
 extern CORE_API MarkerCollector* g_marker_collector;
 
-// Cheap thread id read (TLS on Linux/macOS).
-ALWAYS_INLINE u64 marker_current_tid() { return reinterpret_cast<uintptr_t>(pthread_self()); }
+// Cheap kernel thread id read. Forwards to profiler_current_tid() so
+// markers and the thread registry agree on what "tid" means — must be
+// the kernel TID (gettid() on Linux), not pthread_self() which is a
+// userspace handle. /proc/self/task/<tid>/* and profiler.firefox.com
+// both expect the kernel TID.
+ALWAYS_INLINE u64 marker_current_tid() { return profiler_current_tid(); }
 
 ALWAYS_INLINE MonotonicTime marker_now() { return MonotonicTime::now(); }
 
