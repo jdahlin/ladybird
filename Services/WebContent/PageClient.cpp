@@ -20,7 +20,7 @@
 #include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibIPC/TransportHandle.h>
 #include <LibJS/Console.h>
-#include <LibJS/Profiler.h>
+#include <LibJS/JSStackSampler.h>
 #include <LibJS/Runtime/ConsoleObject.h>
 #include <LibThreading/ThreadPool.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
@@ -829,8 +829,8 @@ void PageClient::page_did_start_network_request(u64 request_id, URL::URL const& 
 {
     client().async_did_start_network_request(m_id, request_id, url, method, request_headers, request_body, move(initiator_type));
 
-    if (m_profiler) {
-        auto start_ms = m_profiler->elapsed_ms_since_start();
+    if (m_js_stack_sampler) {
+        auto start_ms = m_js_stack_sampler->elapsed_ms_since_start();
         m_pending_network_requests.set(request_id, PendingNetworkRequest {
                                                        .url = url.serialize(),
                                                        .method = MUST(String::from_byte_string(method)),
@@ -878,10 +878,10 @@ void PageClient::start_profiling(u32 interval_us)
     auto& vm = Web::Bindings::main_thread_vm();
 
     // Stop any existing profiler first
-    if (m_profiler) {
-        m_profiler->stop();
-        vm.set_profiler(nullptr);
-        m_profiler = nullptr;
+    if (m_js_stack_sampler) {
+        m_js_stack_sampler->stop();
+        vm.set_js_stack_sampler(nullptr);
+        m_js_stack_sampler = nullptr;
     }
     m_profiler_session = nullptr;
 
@@ -898,17 +898,17 @@ void PageClient::start_profiling(u32 interval_us)
     Threading::ThreadPool::the().submit([] { });
 
     auto& profiled_thread = m_profiler_session->create_profiled_thread("Main"_string);
-    m_profiler = make<JS::Profiler>(vm, interval_us);
-    m_profiler->set_profiled_thread(profiled_thread);
-    vm.set_profiler(m_profiler.ptr());
-    m_profiler->start();
-    m_profiler_session->set_timing(m_profiler->start_time(), m_profiler->start_time_epoch_ms(), interval_us);
+    m_js_stack_sampler = make<JS::JSStackSampler>(vm, interval_us);
+    m_js_stack_sampler->set_profiled_thread(profiled_thread);
+    vm.set_js_stack_sampler(m_js_stack_sampler.ptr());
+    m_js_stack_sampler->start();
+    m_profiler_session->set_timing(m_js_stack_sampler->start_time(), m_js_stack_sampler->start_time_epoch_ms(), interval_us);
 
     // Connect the profiler to the marker collector so each marker captures
     // the JS call stack at emit time. This populates the "cause" field on
     // markers in profiler.firefox.com.
     m_profiler_session->markers().set_stack_capture(
-        [profiler = m_profiler.ptr()](Vector<Core::MarkerStackFrame, 8>& out) {
+        [profiler = m_js_stack_sampler.ptr()](Vector<Core::MarkerStackFrame, 8>& out) {
             profiler->capture_marker_stack(out);
         });
 
@@ -989,12 +989,12 @@ void PageClient::start_profiling(u32 interval_us)
 
 void PageClient::stop_profiling()
 {
-    if (!m_profiler)
+    if (!m_js_stack_sampler)
         return;
 
-    m_profiler->stop();
+    m_js_stack_sampler->stop();
     auto& vm = Web::Bindings::main_thread_vm();
-    vm.set_profiler(nullptr);
+    vm.set_js_stack_sampler(nullptr);
 
     if (m_counter_sample_timer) {
         m_counter_sample_timer->stop();
@@ -1003,7 +1003,7 @@ void PageClient::stop_profiling()
 
     m_profiler_session->set_stop_epoch_ms(UnixDateTime::now().milliseconds_since_epoch());
     auto json = Core::write_gecko_profile(*m_profiler_session);
-    m_profiler = nullptr;
+    m_js_stack_sampler = nullptr;
     m_profiler_session = nullptr;
 
     client().async_did_finish_profiling(m_id, move(json));
@@ -1013,9 +1013,9 @@ void PageClient::page_did_finish_network_request(u64 request_id, u64 body_size, 
 {
     client().async_did_finish_network_request(m_id, request_id, body_size, timing_info, network_error);
 
-    if (m_profiler) {
+    if (m_js_stack_sampler) {
         if (auto it = m_pending_network_requests.find(request_id); it != m_pending_network_requests.end()) {
-            auto end_time_ms = m_profiler->elapsed_ms_since_start();
+            auto end_time_ms = m_js_stack_sampler->elapsed_ms_since_start();
             auto const& req = it->value;
 
             // Convert absolute microsecond timestamps to ms relative to profile start.

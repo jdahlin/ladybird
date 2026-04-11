@@ -12,7 +12,7 @@
 #include <LibCore/Profiler/ProfilerSession.h>
 #include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibJS/Bytecode/Interpreter.h>
-#include <LibJS/Profiler.h>
+#include <LibJS/JSStackSampler.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/NativeFunction.h>
 #include <LibJS/Runtime/VM.h>
@@ -29,7 +29,7 @@ static void run_js(JS::VM& vm, JS::Realm& realm, StringView source, StringView f
     VERIFY(!result.is_error());
 }
 
-static void install_request_sample_function(JS::Realm& realm, JS::Profiler& profiler)
+static void install_request_sample_function(JS::Realm& realm, JS::JSStackSampler& profiler)
 {
     realm.global_object().define_native_function(
         realm,
@@ -42,7 +42,7 @@ static void install_request_sample_function(JS::Realm& realm, JS::Profiler& prof
         JS::Attribute::Writable | JS::Attribute::Configurable);
 }
 
-static bool string_table_contains(JS::Profiler const& profiler, StringView needle)
+static bool string_table_contains(JS::JSStackSampler const& profiler, StringView needle)
 {
     for (auto const& str : profiler.string_table()) {
         if (str.contains(needle))
@@ -51,7 +51,7 @@ static bool string_table_contains(JS::Profiler const& profiler, StringView needl
     return false;
 }
 
-static Vector<String> sample_frame_locations(JS::Profiler const& profiler, size_t sample_index)
+static Vector<String> sample_frame_locations(JS::JSStackSampler const& profiler, size_t sample_index)
 {
     Vector<String> locations;
     Optional<u32> stack_index = profiler.samples()[sample_index].stack_index;
@@ -64,7 +64,7 @@ static Vector<String> sample_frame_locations(JS::Profiler const& profiler, size_
     return locations;
 }
 
-static Optional<Vector<String>> find_sample_with_leaf(JS::Profiler const& profiler, StringView leaf_name)
+static Optional<Vector<String>> find_sample_with_leaf(JS::JSStackSampler const& profiler, StringView leaf_name)
 {
     for (size_t i = 0; i < profiler.samples().size(); ++i) {
         auto locations = sample_frame_locations(profiler, i);
@@ -87,15 +87,15 @@ TEST_CASE(profiler_collects_samples)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
-    JS::Profiler profiler(*vm, 1000 /* 1 ms */);
+    JS::JSStackSampler profiler(*vm, 1000 /* 1 ms */);
     if (!profiler.supports_timed_sampling())
         return;
 
-    vm->set_profiler(&profiler);
+    vm->set_js_stack_sampler(&profiler);
     profiler.start();
     run_js(*vm, realm, k_workload);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
 
     EXPECT(profiler.samples().size() > 0u);
     EXPECT(string_table_contains(profiler, "fib"sv));
@@ -107,8 +107,8 @@ TEST_CASE(profiler_samples_global_scope_bytecode)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
-    JS::Profiler profiler(*vm, 0);
-    vm->set_profiler(&profiler);
+    JS::JSStackSampler profiler(*vm, 0);
+    vm->set_js_stack_sampler(&profiler);
     install_request_sample_function(realm, profiler);
     profiler.start();
     // requestSample() sets the pending flag; the sample is then captured at the
@@ -121,7 +121,7 @@ for (let i = 0; i < 500000; i++)
 )js"sv,
         "profiler-global.js"sv);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
 
     EXPECT(profiler.samples().size() > 0u);
     EXPECT(string_table_contains(profiler, "profiler-global.js"sv));
@@ -133,8 +133,8 @@ TEST_CASE(profiler_safe_point_sampling_uses_current_frame)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
-    JS::Profiler profiler(*vm, 0);
-    vm->set_profiler(&profiler);
+    JS::JSStackSampler profiler(*vm, 0);
+    vm->set_js_stack_sampler(&profiler);
     install_request_sample_function(realm, profiler);
     profiler.start();
     run_js(*vm, realm, R"js(
@@ -152,7 +152,7 @@ outer();
 )js"sv,
         "profiler-safe-point.js"sv);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
 
     EXPECT(profiler.samples().size() > 0u);
     auto sample_locations = find_sample_with_leaf(profiler, "inner"sv);
@@ -171,9 +171,9 @@ TEST_CASE(profiler_gecko_json_is_valid)
     Core::ProfilerSession session;
     auto& profiled_thread = session.create_profiled_thread("Main"_string);
 
-    JS::Profiler profiler(*vm, 0);
+    JS::JSStackSampler profiler(*vm, 0);
     profiler.set_profiled_thread(profiled_thread);
-    vm->set_profiler(&profiler);
+    vm->set_js_stack_sampler(&profiler);
     install_request_sample_function(realm, profiler);
     profiler.start();
     session.set_timing(profiler.start_time(), profiler.start_time_epoch_ms(), 0);
@@ -185,7 +185,7 @@ for (let i = 0; i < 500000; i++)
 )js"sv,
         "profiler-gecko.js"sv);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
     Core::profiler_thread_register("Main"sv);
 
     EXPECT(profiler.samples().size() > 0u);
@@ -217,11 +217,11 @@ TEST_CASE(profiler_timed_sampling_captures_call_stack)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
-    JS::Profiler profiler(*vm, 1000 /* 1 ms */);
+    JS::JSStackSampler profiler(*vm, 1000 /* 1 ms */);
     if (!profiler.supports_timed_sampling())
         return;
 
-    vm->set_profiler(&profiler);
+    vm->set_js_stack_sampler(&profiler);
     profiler.start();
     run_js(*vm, realm, R"js(
 function alpha() {
@@ -234,7 +234,7 @@ beta();
 )js"sv,
         "profiler-timed-stack.js"sv);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
 
     // Verify we captured samples with a multi-frame stack through the async path.
     auto sample_locations = find_sample_with_leaf(profiler, "alpha"sv);
@@ -250,8 +250,8 @@ TEST_CASE(profiler_captures_anonymous_functions)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
-    JS::Profiler profiler(*vm, 0);
-    vm->set_profiler(&profiler);
+    JS::JSStackSampler profiler(*vm, 0);
+    vm->set_js_stack_sampler(&profiler);
     install_request_sample_function(realm, profiler);
     profiler.start();
     run_js(*vm, realm, R"js(
@@ -262,7 +262,7 @@ TEST_CASE(profiler_captures_anonymous_functions)
 })();
 )js"sv);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
 
     EXPECT(profiler.samples().size() > 0u);
     EXPECT(string_table_contains(profiler, "(anonymous)"sv));
@@ -274,8 +274,8 @@ TEST_CASE(profiler_uses_inferred_member_assignment_name)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
-    JS::Profiler profiler(*vm, 0);
-    vm->set_profiler(&profiler);
+    JS::JSStackSampler profiler(*vm, 0);
+    vm->set_js_stack_sampler(&profiler);
     install_request_sample_function(realm, profiler);
     profiler.start();
     run_js(*vm, realm, R"js(
@@ -290,7 +290,7 @@ object.method();
 )js"sv,
         "profiler-display-name.js"sv);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
 
     EXPECT_EQ(profiler.samples().size(), 1u);
     EXPECT(string_table_contains(profiler, "object.method (profiler-display-name.js:"sv));
@@ -302,8 +302,8 @@ TEST_CASE(profiler_can_be_reused)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
-    JS::Profiler profiler(*vm, 0);
-    vm->set_profiler(&profiler);
+    JS::JSStackSampler profiler(*vm, 0);
+    vm->set_js_stack_sampler(&profiler);
     install_request_sample_function(realm, profiler);
 
     profiler.start();
@@ -329,7 +329,7 @@ TEST_CASE(profiler_can_be_reused)
 )js"sv,
         "profiler-reuse-second.js"sv);
     profiler.stop();
-    vm->set_profiler(nullptr);
+    vm->set_js_stack_sampler(nullptr);
 
     EXPECT_EQ(profiler.samples().size(), 1u);
     EXPECT(string_table_contains(profiler, "profiler-reuse-second.js"sv));
@@ -342,7 +342,7 @@ TEST_CASE(profiler_stop_without_start_is_safe)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
 
     // stop() on a profiler that was never started should not crash.
-    JS::Profiler profiler(*vm);
+    JS::JSStackSampler profiler(*vm);
     profiler.stop();
     EXPECT_EQ(profiler.samples().size(), 0u);
 }

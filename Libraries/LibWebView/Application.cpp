@@ -642,17 +642,16 @@ static void load_page_and_exit_on_close(Core::EventLoop& event_loop, HeadlessWeb
     view.load(url);
 }
 
-// Load a URL, wait for the load to finish, start profiling, keep sampling
-// for `duration_ms` milliseconds, stop profiling, write the gecko JSON to
-// `output_path`, then quit. Used by --headless=profile.
+// Start profiling immediately, load a URL, sample for `duration_ms`
+// milliseconds, stop, write the gecko JSON, quit. Profiling spans the
+// page load itself — matches what Firefox "Start Recording" does when
+// navigating. Used by --headless=profile.
 static NonnullRefPtr<Core::Timer> load_page_for_profile_and_exit(
     Core::EventLoop& event_loop, HeadlessWebView& view, URL::URL const& url,
     ByteString output_path, int duration_ms, int interval_us)
 {
     outln("Profiling {} for {} ms (interval: {} us)", url, duration_ms, interval_us);
 
-    // Single-shot timer used *after* the load finishes to stop the
-    // profile. Constructed here so both callbacks can hold a reference.
     auto stop_timer = Core::Timer::create_single_shot(
         duration_ms,
         [&view]() {
@@ -677,15 +676,10 @@ static NonnullRefPtr<Core::Timer> load_page_for_profile_and_exit(
         event_loop.quit(0);
     };
 
-    view.on_load_finish = [&view, &stop_timer = *stop_timer, interval_us, url](auto const& loaded_url) {
-        if (!url.equals(loaded_url, URL::ExcludeFragment::Yes))
-            return;
-        outln("Load finished, starting profiler");
-        view.start_profiling(static_cast<u32>(interval_us));
-        stop_timer.start();
-    };
-
+    outln("Starting profiler, then navigating to {}", url);
+    view.start_profiling(static_cast<u32>(interval_us));
     view.load(url);
+    stop_timer->start();
     return stop_timer;
 }
 

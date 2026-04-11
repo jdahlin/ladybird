@@ -8,7 +8,7 @@
 #include <LibCore/Profiler/Label.h>
 #include <LibCore/Profiler/PlatformSampler.h>
 #include <LibJS/Bytecode/Executable.h>
-#include <LibJS/Profiler.h>
+#include <LibJS/JSStackSampler.h>
 #include <LibJS/Runtime/VM.h>
 #include <LibJS/SourceRange.h>
 
@@ -19,7 +19,7 @@ static i64 current_epoch_ms()
     return UnixDateTime::now().milliseconds_since_epoch();
 }
 
-Profiler::Profiler(VM& vm, int interval_us)
+JSStackSampler::JSStackSampler(VM& vm, int interval_us)
     : m_vm(vm)
     , m_interval_us(interval_us)
     , m_fallback_profiled_thread(make<Core::ProfiledThread>("Main"_string))
@@ -30,24 +30,24 @@ Profiler::Profiler(VM& vm, int interval_us)
     m_profiled_thread = m_fallback_profiled_thread.ptr();
 }
 
-Profiler::~Profiler()
+JSStackSampler::~JSStackSampler()
 {
     stop();
 }
 
-void Profiler::sample_if_needed()
+void JSStackSampler::sample_if_needed()
 {
     if (!m_sample_pending.exchange(false, AK::MemoryOrder::memory_order_relaxed))
         return;
     do_capture_sample({});
 }
 
-void Profiler::request_sample_for_test()
+void JSStackSampler::request_sample_for_test()
 {
     m_sample_pending.store(true, AK::MemoryOrder::memory_order_relaxed);
 }
 
-void Profiler::reset_state_for_start()
+void JSStackSampler::reset_state_for_start()
 {
     VERIFY(m_profiled_thread);
     m_start_time = MonotonicTime::now();
@@ -60,19 +60,19 @@ void Profiler::reset_state_for_start()
     m_profiled_thread->clear();
 }
 
-void Profiler::reserve_output_tables()
+void JSStackSampler::reserve_output_tables()
 {
     VERIFY(m_profiled_thread);
     m_profiled_thread->reserve_capacity();
 }
 
-void Profiler::allocate_raw_samples()
+void JSStackSampler::allocate_raw_samples()
 {
     delete[] m_raw_samples;
     m_raw_samples = new RawSample[MAX_RAW_SAMPLES];
 }
 
-void Profiler::process_and_free_raw_samples()
+void JSStackSampler::process_and_free_raw_samples()
 {
     if (!m_raw_samples)
         return;
@@ -82,20 +82,20 @@ void Profiler::process_and_free_raw_samples()
     m_raw_samples = nullptr;
 }
 
-double Profiler::elapsed_ms_since_start() const
+double JSStackSampler::elapsed_ms_since_start() const
 {
     auto elapsed = MonotonicTime::now() - m_start_time;
     return static_cast<double>(max(elapsed.to_microseconds(), static_cast<i64>(0))) / 1000.0;
 }
 
-void Profiler::allocate_sample_buffer()
+void JSStackSampler::allocate_sample_buffer()
 {
     reset_state_for_start();
     allocate_raw_samples();
     reserve_output_tables();
 }
 
-void Profiler::collect_and_free_samples()
+void JSStackSampler::collect_and_free_samples()
 {
     m_stop_epoch_ms = current_epoch_ms();
     process_and_free_raw_samples();
@@ -104,7 +104,7 @@ void Profiler::collect_and_free_samples()
 // Platform-neutral start/stop — the timed sampling driver lives in
 // Core::PlatformSampler; this just allocates the buffer, publishes the
 // SamplingHandle, and asks the driver to start.
-void Profiler::start()
+void JSStackSampler::start()
 {
     allocate_sample_buffer();
     if (m_interval_us <= 0)
@@ -122,21 +122,21 @@ void Profiler::start()
     (void)Core::PlatformSampler::start({ &m_sampling_handle, m_js_thread, m_interval_us });
 }
 
-void Profiler::stop()
+void JSStackSampler::stop()
 {
     Core::PlatformSampler::stop();
     collect_and_free_samples();
 }
 
-bool Profiler::supports_timed_sampling() const { return m_interval_us > 0; }
+bool JSStackSampler::supports_timed_sampling() const { return m_interval_us > 0; }
 
 // Timed sampling reads the PC from the signal handler's ucontext on
 // Linux and from thread_get_state on macOS, so safe-point polling is
 // only needed on platforms where timed sampling is unavailable (today
 // that's Windows and the "interval <= 0" test-only path).
-bool Profiler::needs_bytecode_safe_points() const { return m_interval_us <= 0; }
+bool JSStackSampler::needs_bytecode_safe_points() const { return m_interval_us <= 0; }
 
-void Profiler::capture_frames(RawSample& tick, Optional<u32> leaf_program_counter)
+void JSStackSampler::capture_frames(RawSample& tick, Optional<u32> leaf_program_counter)
 {
     // Frames are stored leaf-first: frames[0] is the innermost call.
     // intern_stack_trace iterates frame_count-1 down to 0, so the LAST stored
@@ -214,7 +214,7 @@ void Profiler::capture_frames(RawSample& tick, Optional<u32> leaf_program_counte
     tick.frame_count = frame_count;
 }
 
-void Profiler::do_capture_sample(Optional<u32> leaf_program_counter)
+void JSStackSampler::do_capture_sample(Optional<u32> leaf_program_counter)
 {
     auto index = m_raw_sample_count.load(AK::MemoryOrder::memory_order_relaxed);
     if (index >= MAX_RAW_SAMPLES || !m_raw_samples)
@@ -226,7 +226,7 @@ void Profiler::do_capture_sample(Optional<u32> leaf_program_counter)
     m_raw_sample_count.store(index + 1, AK::MemoryOrder::memory_order_relaxed);
 }
 
-void Profiler::capture_sample(Core::ProfiledThread& output, Optional<u32> leaf_program_counter)
+void JSStackSampler::capture_sample(Core::ProfiledThread& output, Optional<u32> leaf_program_counter)
 {
     // The output is driven by set_profiled_thread() today — step 6 wires
     // it through the SamplingHandle so the platform sampler picks the
@@ -235,7 +235,7 @@ void Profiler::capture_sample(Core::ProfiledThread& output, Optional<u32> leaf_p
     do_capture_sample(leaf_program_counter);
 }
 
-void Profiler::process_raw_samples()
+void JSStackSampler::process_raw_samples()
 {
     VERIFY(m_profiled_thread);
     auto count = min(m_raw_sample_count.load(AK::MemoryOrder::memory_order_relaxed), MAX_RAW_SAMPLES);
@@ -256,7 +256,7 @@ void Profiler::process_raw_samples()
 // stack is owned by that thread and not synchronized. Markers emitted from
 // other threads (e.g. media decoder workers) must NOT call this — we'd race
 // against the main thread modifying the stack.
-void Profiler::capture_marker_stack(Vector<Core::MarkerStackFrame, 8>& out)
+void JSStackSampler::capture_marker_stack(Vector<Core::MarkerStackFrame, 8>& out)
 {
     out.clear_with_capacity();
 
@@ -300,7 +300,7 @@ void Profiler::capture_marker_stack(Vector<Core::MarkerStackFrame, 8>& out)
     }
 }
 
-u32 Profiler::intern_stack_trace(RawSample const& tick)
+u32 JSStackSampler::intern_stack_trace(RawSample const& tick)
 {
     Optional<u32> prefix;
 

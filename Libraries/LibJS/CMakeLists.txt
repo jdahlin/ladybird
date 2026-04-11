@@ -22,7 +22,7 @@ set(SOURCES
     Module.cpp
     ParserError.cpp
     Print.cpp
-    Profiler.cpp
+    JSStackSampler.cpp
 )
 
 set(SOURCES ${SOURCES}

@@ -54,7 +54,7 @@ enum class CompilationType {
     Timer,
 };
 
-class Profiler;
+class JSStackSampler;
 
 class JS_API VM : public RefCounted<VM> {
 public:
@@ -138,8 +138,8 @@ public:
         m_execution_context_stack.append(&context);
     }
 
-    void set_profiler(Profiler* profiler) { m_profiler = profiler; }
-    Profiler* profiler() { return m_profiler; }
+    void set_js_stack_sampler(JSStackSampler* sampler) { m_js_stack_sampler = sampler; }
+    JSStackSampler* js_stack_sampler() { return m_js_stack_sampler; }
 
     void pop_execution_context()
     {
@@ -336,7 +336,7 @@ private:
 
     GC::Heap m_heap;
 
-    Profiler* m_profiler { nullptr };
+    JSStackSampler* m_js_stack_sampler { nullptr };
 
     Vector<ExecutionContext*> m_execution_context_stack;
 

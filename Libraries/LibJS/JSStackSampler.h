@@ -23,10 +23,10 @@
 
 namespace JS {
 
-class JS_API Profiler : public Core::StackSampler {
+class JS_API JSStackSampler : public Core::StackSampler {
 public:
-    explicit Profiler(VM&, int interval_us = 1000);
-    ~Profiler();
+    explicit JSStackSampler(VM&, int interval_us = 1000);
+    ~JSStackSampler();
 
     // Output destination for sampled frames/stacks. Must be set before
     // start(). Usually points at a ProfiledThread owned by the
@@ -112,7 +112,7 @@ public:
 private:
     // Async-signal-safe internal entry point — called by the public
     // override above and by the Linux signal handler / macOS suspend
-    // loop which still reference the JS::Profiler directly in step 5.
+    // loop which still reference the JS::JSStackSampler directly in step 5.
     // Must not allocate or call non-reentrant functions.
     void do_capture_sample(Optional<u32> leaf_program_counter);
     void reset_state_for_start();
@@ -148,17 +148,17 @@ private:
     bool m_platform_sampling_active { false };
 };
 
-inline i64 Profiler::start_time_epoch_ms() const
+inline i64 JSStackSampler::start_time_epoch_ms() const
 {
     return m_start_epoch_ms;
 }
 
-inline i64 Profiler::stop_time_epoch_ms() const
+inline i64 JSStackSampler::stop_time_epoch_ms() const
 {
     return m_stop_epoch_ms;
 }
 
-inline u64 Profiler::os_tid() const
+inline u64 JSStackSampler::os_tid() const
 {
     return static_cast<u64>(reinterpret_cast<uintptr_t>(m_js_thread));
 }

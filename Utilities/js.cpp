@@ -21,8 +21,8 @@
 #include <LibJS/Bytecode/Interpreter.h>
 #include <LibJS/Console.h>
 #include <LibJS/Contrib/Test262/GlobalObject.h>
+#include <LibJS/JSStackSampler.h>
 #include <LibJS/Print.h>
-#include <LibJS/Profiler.h>
 #include <LibJS/Runtime/ConsoleObject.h>
 #include <LibJS/Runtime/DeclarativeEnvironment.h>
 #include <LibJS/Runtime/GlobalEnvironment.h>
@@ -956,7 +956,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
         // We resolve modules as if it is the first file
 
-        OwnPtr<JS::Profiler> profiler;
+        OwnPtr<JS::JSStackSampler> profiler;
         OwnPtr<Core::ProfilerSession> profiler_session;
         if (!profile_output.is_empty()) {
             int interval_us = max(static_cast<int>(profile_interval_ms * 1000), 100);
@@ -968,9 +968,9 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             Core::profiler_set_process_type("default"_string);
             Core::profiler_thread_register("Main"sv);
             auto& profiled_thread = profiler_session->create_profiled_thread("Main"_string);
-            profiler = make<JS::Profiler>(*g_vm, interval_us);
+            profiler = make<JS::JSStackSampler>(*g_vm, interval_us);
             profiler->set_profiled_thread(profiled_thread);
-            g_vm->set_profiler(profiler.ptr());
+            g_vm->set_js_stack_sampler(profiler.ptr());
             profiler->start();
             profiler_session->set_timing(profiler->start_time(), profiler->start_time_epoch_ms(), interval_us);
 
@@ -987,7 +987,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
         if (profiler) {
             profiler->stop();
-            g_vm->set_profiler(nullptr);
+            g_vm->set_js_stack_sampler(nullptr);
             profiler_session->set_stop_epoch_ms(UnixDateTime::now().milliseconds_since_epoch());
             auto json = Core::write_gecko_profile(*profiler_session);
             profiler_session = nullptr;

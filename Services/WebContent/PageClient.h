@@ -31,7 +31,7 @@ class ProfilerSession;
 
 namespace JS {
 
-class Profiler;
+class JSStackSampler;
 
 }
 
@@ -246,7 +246,7 @@ private:
 
     u64 m_devtools_client_count { 0 };
 
-    OwnPtr<JS::Profiler> m_profiler;
+    OwnPtr<JS::JSStackSampler> m_js_stack_sampler;
     OwnPtr<Core::ProfilerSession> m_profiler_session;
     RefPtr<Core::Timer> m_counter_sample_timer;
 
