@@ -26,16 +26,6 @@ set(SOURCES
     GeckoProfileWriter.cpp
 )
 
-if (APPLE)
-    list(APPEND SOURCES ProfilerMacOS.cpp)
-elseif (WIN32)
-    list(APPEND SOURCES ProfilerWindows.cpp)
-elseif (LINUX)
-    list(APPEND SOURCES ProfilerLinux.cpp)
-else()
-    message(FATAL_ERROR "LibJS profiler backend is only implemented for APPLE, WIN32, and LINUX")
-endif()
-
 set(SOURCES ${SOURCES}
     RustIntegration.cpp
     Runtime/AbstractOperations.cpp

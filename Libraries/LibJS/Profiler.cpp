@@ -6,6 +6,7 @@
 
 #include <AK/Time.h>
 #include <LibCore/Profiler/Label.h>
+#include <LibCore/Profiler/PlatformSampler.h>
 #include <LibJS/Bytecode/Executable.h>
 #include <LibJS/Profiler.h>
 #include <LibJS/Runtime/VM.h>
@@ -81,16 +82,6 @@ void Profiler::process_and_free_raw_samples()
     m_raw_samples = nullptr;
 }
 
-void Profiler::stop_timer_thread()
-{
-    m_timer_running.store(false, AK::MemoryOrder::memory_order_relaxed);
-    if (!m_timer_thread)
-        return;
-
-    (void)m_timer_thread->join();
-    m_timer_thread = nullptr;
-}
-
 double Profiler::elapsed_ms_since_start() const
 {
     auto elapsed = MonotonicTime::now() - m_start_time;
@@ -107,9 +98,43 @@ void Profiler::allocate_sample_buffer()
 void Profiler::collect_and_free_samples()
 {
     m_stop_epoch_ms = current_epoch_ms();
-    stop_timer_thread();
     process_and_free_raw_samples();
 }
+
+// Platform-neutral start/stop — the timed sampling driver lives in
+// Core::PlatformSampler; this just allocates the buffer, publishes the
+// SamplingHandle, and asks the driver to start.
+void Profiler::start()
+{
+    allocate_sample_buffer();
+    if (m_interval_us <= 0)
+        return;
+
+    // The signal handler reads t_profiler_state and then the atomic
+    // active_sampling_handle stored on that state. Make sure the calling
+    // thread has profiler state so the handler can find us.
+    Core::ensure_profiler_state();
+
+    m_sampling_handle.sampler = this;
+    m_sampling_handle.profiled = m_profiled_thread;
+    m_sampling_handle.in_handler.store(false, AK::MemoryOrder::memory_order_relaxed);
+
+    (void)Core::PlatformSampler::start({ &m_sampling_handle, m_js_thread, m_interval_us });
+}
+
+void Profiler::stop()
+{
+    Core::PlatformSampler::stop();
+    collect_and_free_samples();
+}
+
+bool Profiler::supports_timed_sampling() const { return m_interval_us > 0; }
+
+// Timed sampling reads the PC from the signal handler's ucontext on
+// Linux and from thread_get_state on macOS, so safe-point polling is
+// only needed on platforms where timed sampling is unavailable (today
+// that's Windows and the "interval <= 0" test-only path).
+bool Profiler::needs_bytecode_safe_points() const { return m_interval_us <= 0; }
 
 void Profiler::capture_frames(RawSample& tick, Optional<u32> leaf_program_counter)
 {

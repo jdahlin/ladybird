@@ -15,12 +15,11 @@
 #include <AK/Vector.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/ProfiledThread.h>
+#include <LibCore/Profiler/SamplingHandle.h>
 #include <LibCore/Profiler/StackSampler.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
-#include <LibThreading/Thread.h>
 #include <pthread.h>
-#include <signal.h>
 
 namespace JS {
 
@@ -134,8 +133,6 @@ private:
         UnprocessedFrame frames[MAX_STACK_DEPTH];
     };
 
-    static void signal_handler(int, siginfo_t*, void*);
-
 public:
     // StackSampler interface. In step 5 this simply delegates to the
     // existing internal path using m_profiled_thread as the output;
@@ -154,7 +151,6 @@ private:
     void allocate_raw_samples();
     void process_and_free_raw_samples();
     void capture_frames(RawSample&, Optional<u32> leaf_program_counter);
-    void stop_timer_thread();
     void allocate_sample_buffer();
     void collect_and_free_samples();
 
@@ -171,9 +167,8 @@ private:
     ::MonotonicTime m_start_time { ::MonotonicTime::now() };
     i64 m_start_epoch_ms { 0 };
     i64 m_stop_epoch_ms { 0 };
-    Atomic<bool> m_timer_running { false };
-    RefPtr<Threading::Thread> m_timer_thread;
     pthread_t m_js_thread {};
+    Core::SamplingHandle m_sampling_handle {};
 
     RawSample* m_raw_samples { nullptr };
     Atomic<u32> m_raw_sample_count { 0 };
@@ -181,7 +176,6 @@ private:
     // Set either by the Linux signal handler or by tests requesting a sample,
     // then consumed by sample_if_needed() at the next safe bytecode boundary.
     Atomic<bool> m_sample_pending { false };
-    struct sigaction m_old_sigaction {};
     bool m_platform_sampling_active { false };
 
     Vector<NetworkMarker> m_network_markers;

@@ -97,6 +97,14 @@ if (APPLE)
     list(APPEND SOURCES Platform/ScopedAutoreleasePoolMacOS.mm)
 endif()
 
+if (LINUX)
+    list(APPEND SOURCES Profiler/PlatformSamplerLinux.cpp)
+elseif (APPLE)
+    list(APPEND SOURCES Profiler/PlatformSamplerMacOS.cpp)
+elseif (WIN32)
+    list(APPEND SOURCES Profiler/PlatformSamplerWindows.cpp)
+endif()
+
 ladybird_lib(LibCore core EXPLICIT_SYMBOL_EXPORT)
 target_link_libraries(LibCore PRIVATE LibUnicode LibURL Threads::Threads LibTextCodec)
 
