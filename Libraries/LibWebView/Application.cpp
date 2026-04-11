@@ -130,6 +130,9 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
     Vector<ByteString> raw_urls;
     Vector<ByteString> certificates;
     Optional<HeadlessMode> headless_mode;
+    ByteString profile_output_path;
+    int profile_duration_ms = 5000;
+    int profile_interval_us = 1000;
     Optional<int> window_width;
     Optional<int> window_height;
     Optional<u32> screenshot_delay;
@@ -171,7 +174,7 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
 
     args_parser.add_option(Core::ArgsParser::Option {
         .argument_mode = Core::ArgsParser::OptionArgumentMode::Optional,
-        .help_string = "Run Ladybird without a browser window. Mode may be 'screenshot' (default), 'layout-tree', 'text', or 'manual'.",
+        .help_string = "Run Ladybird without a browser window. Mode may be 'screenshot' (default), 'layout-tree', 'text', 'manual', or 'profile'.",
         .long_name = "headless",
         .value_name = "mode",
         .accept_value = [&](StringView value) {
@@ -186,12 +189,18 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
                 headless_mode = HeadlessMode::Text;
             else if (value.equals_ignoring_ascii_case("manual"sv))
                 headless_mode = HeadlessMode::Manual;
+            else if (value.equals_ignoring_ascii_case("profile"sv))
+                headless_mode = HeadlessMode::Profile;
 
             return headless_mode.has_value();
         },
     });
 
     args_parser.add_option(screenshot_delay, "Set the number of seconds to wait before taking a screenshot (only supported for headless screenshot mode)", "screenshot-delay", 0, "seconds");
+    args_parser.add_option(profile_output_path, "Write Gecko profile JSON to the given path (use with --headless=profile)", "profile-output", 0, "path");
+    args_parser.add_option(profile_duration_ms, "Duration in ms to sample the URL for (--headless=profile, default: 5000)", "profile-duration", 0, "ms");
+    args_parser.add_option(profile_interval_us, "Profiler sampling interval in microseconds (--headless=profile, default: 1000)", "profile-interval", 0, "us");
+
     args_parser.add_option(window_width, "Set viewport width in pixels (default: 800) (currently only supported for headless mode)", "window-width", 0, "pixels");
     args_parser.add_option(window_height, "Set viewport height in pixels (default: 600) (currently only supported for headless mode)", "window-height", 0, "pixels");
     args_parser.add_option(certificates, "Path to a certificate file", "certificate", 'C', "certificate");
@@ -309,6 +318,9 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
                 : OptionalNone()),
         .devtools_port = devtools_port,
         .enable_content_filter = disable_content_filter ? EnableContentFilter::No : EnableContentFilter::Yes,
+        .profile_output_path = {},
+        .profile_duration_ms = 5000,
+        .profile_interval_us = 1000,
     };
 
     if (screenshot_delay.has_value())
@@ -320,6 +332,11 @@ ErrorOr<void> Application::initialize(Main::Arguments const& arguments)
 
     if (webdriver_endpoint.has_value())
         m_browser_options.webdriver_endpoint = *webdriver_endpoint;
+
+    if (!profile_output_path.is_empty())
+        m_browser_options.profile_output_path = profile_output_path;
+    m_browser_options.profile_duration_ms = profile_duration_ms;
+    m_browser_options.profile_interval_us = profile_interval_us;
 
     auto http_disk_cache_mode = HTTPDiskCacheMode::Enabled;
     if (disable_http_disk_cache)
@@ -625,10 +642,58 @@ static void load_page_and_exit_on_close(Core::EventLoop& event_loop, HeadlessWeb
     view.load(url);
 }
 
+// Load a URL, wait for the load to finish, start profiling, keep sampling
+// for `duration_ms` milliseconds, stop profiling, write the gecko JSON to
+// `output_path`, then quit. Used by --headless=profile.
+static NonnullRefPtr<Core::Timer> load_page_for_profile_and_exit(
+    Core::EventLoop& event_loop, HeadlessWebView& view, URL::URL const& url,
+    ByteString output_path, int duration_ms, int interval_us)
+{
+    outln("Profiling {} for {} ms (interval: {} us)", url, duration_ms, interval_us);
+
+    // Single-shot timer used *after* the load finishes to stop the
+    // profile. Constructed here so both callbacks can hold a reference.
+    auto stop_timer = Core::Timer::create_single_shot(
+        duration_ms,
+        [&view]() {
+            outln("Stopping profile");
+            view.stop_profiling();
+        });
+
+    view.on_received_profiling_result = [&event_loop, output_path = move(output_path)](String gecko_profile_json) {
+        auto file_or_error = Core::File::open(output_path, Core::File::OpenMode::Write);
+        if (file_or_error.is_error()) {
+            warnln("Failed to open {}: {}", output_path, file_or_error.error());
+            event_loop.quit(1);
+            return;
+        }
+        auto write_result = file_or_error.value()->write_until_depleted(gecko_profile_json.bytes());
+        if (write_result.is_error()) {
+            warnln("Failed to write profile: {}", write_result.error());
+            event_loop.quit(1);
+            return;
+        }
+        outln("Profile written to {} ({} bytes)", output_path, gecko_profile_json.bytes().size());
+        event_loop.quit(0);
+    };
+
+    view.on_load_finish = [&view, &stop_timer = *stop_timer, interval_us, url](auto const& loaded_url) {
+        if (!url.equals(loaded_url, URL::ExcludeFragment::Yes))
+            return;
+        outln("Load finished, starting profiler");
+        view.start_profiling(static_cast<u32>(interval_us));
+        stop_timer.start();
+    };
+
+    view.load(url);
+    return stop_timer;
+}
+
 ErrorOr<int> Application::execute()
 {
     OwnPtr<HeadlessWebView> view;
     RefPtr<Core::Timer> screenshot_timer;
+    RefPtr<Core::Timer> profile_stop_timer;
 
     if (m_browser_options.headless_mode.has_value()) {
         auto theme_path = LexicalPath::join(WebView::s_ladybird_resource_root, "themes"sv, "Default.ini"sv);
@@ -652,6 +717,15 @@ ErrorOr<int> Application::execute()
                 break;
             case HeadlessMode::Manual:
                 load_page_and_exit_on_close(*m_event_loop, *view, m_browser_options.urls.first());
+                break;
+            case HeadlessMode::Profile:
+                if (!m_browser_options.profile_output_path.has_value())
+                    return Error::from_string_literal("--headless=profile requires --profile-output <path>");
+                profile_stop_timer = load_page_for_profile_and_exit(
+                    *m_event_loop, *view, m_browser_options.urls.first(),
+                    *m_browser_options.profile_output_path,
+                    m_browser_options.profile_duration_ms,
+                    m_browser_options.profile_interval_us);
                 break;
             case HeadlessMode::Test:
                 VERIFY_NOT_REACHED();

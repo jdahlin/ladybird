@@ -21,6 +21,7 @@
 #include <LibCore/Profiler/ProfilerSession.h>
 #include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/System.h>
+#include <unistd.h>
 
 namespace Core {
 
@@ -250,6 +251,17 @@ static JsonObject build_meta(ProfilerSession const& session)
     meta.set("abi"sv, "x86_64-gcc3"sv);
     meta.set("misc"sv, "rv:1.0"sv);
     meta.set("symbolicated"sv, true);
+    meta.set("appBuildID"sv, "Ladybird"sv);
+    meta.set("updateChannel"sv, "default"sv);
+    meta.set("sourceURL"sv, ""sv);
+
+    // profiler.firefox.com shows these in the "System" panel.
+    auto logical_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (logical_cpus > 0)
+        meta.set("logicalCPUs"sv, static_cast<double>(logical_cpus));
+    auto physical_cpus = sysconf(_SC_NPROCESSORS_CONF);
+    if (physical_cpus > 0)
+        meta.set("physicalCPUs"sv, static_cast<double>(physical_cpus));
 
     // profiler.firefox.com reads sampleUnits to label the time and
     // event-delay columns in the sample table.
@@ -449,21 +461,14 @@ static JsonObject build_markers(ProfilerSession const& session, u64 thread_tid, 
         move(data));
 }
 
-// Build one gecko thread entry from a ProfiledThread.
-static JsonObject build_thread_from_profiled(ProfilerSession const& session, ProfiledThread const& profiled, u64 tid, bool include_network)
+static void populate_common_thread_fields(ProfilerSession const& session, JsonObject& thread, StringView name, u64 tid, bool is_main_thread)
 {
-    JsonArray string_table;
-    for (auto const& str : profiled.string_table)
-        string_table.must_append(str);
-
-    auto markers = build_markers(session, tid, include_network, string_table);
-
-    JsonObject thread;
     // profiler.firefox.com treats "GeckoMain" as the special JS-capable
     // main thread. Ladybird registers its JS thread as "Main" internally
     // and we translate here so gecko sees what it expects.
-    StringView name = profiled.name() == "Main"sv ? "GeckoMain"sv : profiled.name().bytes_as_string_view();
-    thread.set("name"sv, name);
+    StringView exported_name = name == "Main"sv ? "GeckoMain"sv : name;
+    thread.set("name"sv, exported_name);
+    thread.set("isMainThread"sv, is_main_thread);
     auto process_type = !session.process_type().is_empty()
         ? session.process_type().bytes_as_string_view()
         : "default"sv;
@@ -474,6 +479,25 @@ static JsonObject build_thread_from_profiled(ProfilerSession const& session, Pro
     thread.set("pid"sv, Core::System::getpid());
     thread.set("registerTime"sv, 0.0);
     thread.set("unregisterTime"sv, JsonValue {});
+    // These three are required by profiler.firefox.com's thread-shape
+    // validator even when they're empty.
+    thread.set("processStartupTime"sv, 0.0);
+    thread.set("processShutdownTime"sv, JsonValue {});
+    thread.set("pausedRanges"sv, JsonArray {});
+    thread.set("usedInnerWindowIDs"sv, JsonArray {});
+}
+
+// Build one gecko thread entry from a ProfiledThread.
+static JsonObject build_thread_from_profiled(ProfilerSession const& session, ProfiledThread const& profiled, u64 tid, bool is_main_thread, bool include_network)
+{
+    JsonArray string_table;
+    for (auto const& str : profiled.string_table)
+        string_table.must_append(str);
+
+    auto markers = build_markers(session, tid, include_network, string_table);
+
+    JsonObject thread;
+    populate_common_thread_fields(session, thread, profiled.name().bytes_as_string_view(), tid, is_main_thread);
     thread.set("markers"sv, move(markers));
     thread.set("samples"sv, build_samples(profiled));
     thread.set("frameTable"sv, build_frame_table(profiled));
@@ -491,18 +515,7 @@ static JsonObject build_thread_markers_only(ProfilerSession const& session, u64 
     auto markers = build_markers(session, tid, /* include_network = */ false, string_table);
 
     JsonObject thread;
-    StringView exported_name = name == "Main"sv ? "GeckoMain"sv : name;
-    thread.set("name"sv, exported_name);
-    auto process_type = !session.process_type().is_empty()
-        ? session.process_type().bytes_as_string_view()
-        : "default"sv;
-    thread.set("processType"sv, process_type);
-    if (!session.process_name().is_empty())
-        thread.set("processName"sv, session.process_name());
-    thread.set("tid"sv, tid);
-    thread.set("pid"sv, Core::System::getpid());
-    thread.set("registerTime"sv, 0.0);
-    thread.set("unregisterTime"sv, JsonValue {});
+    populate_common_thread_fields(session, thread, name, tid, /* is_main_thread = */ false);
     thread.set("markers"sv, move(markers));
     thread.set("samples"sv, schema_data_table({ "stack"sv, "time"sv, "responsiveness"sv }, JsonArray {}));
     thread.set("frameTable"sv, schema_data_table({ "location"sv, "relevantForJS"sv, "innerWindowID"sv, "implementation"sv, "line"sv, "column"sv, "category"sv, "subcategory"sv }, JsonArray {}));
@@ -536,7 +549,7 @@ static JsonArray build_threads(ProfilerSession const& session)
         if (tid == 0)
             continue;
         emitted_tids.set(tid);
-        threads.must_append(build_thread_from_profiled(session, *profiled, tid, /* include_network = */ first));
+        threads.must_append(build_thread_from_profiled(session, *profiled, tid, /* is_main_thread = */ first, /* include_network = */ first));
         first = false;
     }
 

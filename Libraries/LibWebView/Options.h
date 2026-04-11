@@ -21,6 +21,7 @@ enum class HeadlessMode {
     Text,
     Manual,
     Test,
+    Profile,
 };
 
 enum class NewWindow {
@@ -92,6 +93,11 @@ struct BrowserOptions {
     Optional<DNSSettings> dns_settings {};
     Optional<u16> devtools_port;
     EnableContentFilter enable_content_filter { EnableContentFilter::Yes };
+
+    // --headless=profile: load a URL, sample for N ms, write gecko JSON.
+    Optional<ByteString> profile_output_path;
+    int profile_duration_ms { 5000 };
+    int profile_interval_us { 1000 };
 };
 
 enum class HTTPDiskCacheMode {
