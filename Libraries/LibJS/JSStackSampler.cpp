@@ -107,13 +107,16 @@ void JSStackSampler::collect_and_free_samples()
 void JSStackSampler::start()
 {
     allocate_sample_buffer();
+
+    // Make sure the calling thread has profiler state so the unified
+    // profiling stack is reachable. Required for both timed sampling
+    // (signal handler reads it) AND safe-point sampling (capture_frames
+    // walks state->profiling_stack), so do it before the timed-sampling
+    // early return below.
+    Core::ensure_profiler_state();
+
     if (m_interval_us <= 0)
         return;
-
-    // The signal handler reads t_profiler_state and then the atomic
-    // active_sampling_handle stored on that state. Make sure the calling
-    // thread has profiler state so the handler can find us.
-    Core::ensure_profiler_state();
 
     m_sampling_handle.sampler = this;
     m_sampling_handle.profiled = m_profiled_thread;
@@ -138,76 +141,75 @@ bool JSStackSampler::needs_bytecode_safe_points() const { return m_interval_us <
 
 void JSStackSampler::capture_frames(RawSample& tick, Optional<u32> leaf_program_counter)
 {
-    // Frames are stored leaf-first: frames[0] is the innermost call.
-    // intern_stack_trace iterates frame_count-1 down to 0, so the LAST stored
-    // frame is processed FIRST (it becomes the outermost / root).
-    //
-    // To put marker scope frames at the BOTTOM (outermost) of the call tree,
-    // we store them AFTER the JS frames so they end up at high indices and
-    // get processed first by intern_stack_trace.
-    auto const& ec_stack = m_vm.execution_context_stack();
-    u32 frame_count = 0;
-
-    // Snapshot the stack size up front. The vector may grow under us if a signal
-    // arrives mid-push, but we only iterate up to the size we observed.
-    auto const stack_size = ec_stack.size();
-
-    for (ssize_t i = static_cast<ssize_t>(stack_size) - 1; i >= 0 && frame_count < MAX_STACK_DEPTH; --i) {
-        auto* ctx = ec_stack[i];
-        if (!ctx)
-            continue;
-
-        // Defensively snapshot the executable pointer once.  push_inline_frame may
-        // have set this last (race window between push_back and field assignment),
-        // and we'd rather skip a frame than crash dereferencing garbage.
-        auto* executable = ctx->executable.ptr();
-        if (!executable)
-            continue;
-
-        // Sanity check the executable pointer alignment — GC cells are at least
-        // 8-byte aligned. A garbage pointer is unlikely to be aligned.
-        if (bit_cast<uintptr_t>(executable) & 0x7)
-            continue;
-
-        // Use the register-derived offset only for the topmost frame (macOS Mach path).
-        // On the Linux safe-point path leaf_program_counter is absent and ctx->program_counter
-        // is used for all frames. For inner frames on macOS (frame_count > 0),
-        // ctx->program_counter may be stale when the ASM interpreter is running.
-        auto program_counter = (frame_count == 0 && leaf_program_counter.has_value())
-            ? *leaf_program_counter
-            : ctx->program_counter;
-
-        auto& frame = tick.frames[frame_count++];
-        frame.executable = bit_cast<FlatPtr>(executable);
-        frame.program_counter = program_counter;
-        frame.name = executable->name;
-        frame.marker_name_ptr = nullptr;
-        frame.marker_name_len = 0;
-    }
-
-    // Append label frames from the FixedProfilingStack AFTER JS frames so
-    // they end up at high indices and become the OUTERMOST callers (root of
-    // the call tree). They survive even when JS isn't running — critical
-    // because Layout/Style/Paint happen in C++ with no JS frames active.
+    // Walk the unified profiling stack: every label push (PROFILER_LABEL,
+    // MARKER_SCOPE) AND every JS function entry (push_inline_frame /
+    // vm.push_execution_context) lives on the same FixedProfilingStack, so
+    // their relative ordering is preserved. The leaf is the most recently
+    // pushed frame, the root is the first one.
     //
     // Reading the fixed stack from a signal handler is safe: the owning
     // thread is the only writer, we acquire-load the size, and frames
     // below that size are guaranteed to have been fully written before the
     // size store was released.
-    if (auto* state = Core::t_profiler_state) {
-        auto const& stack = state->profiling_stack;
-        auto const scope_count = stack.size();
-        for (u32 i = 0; i < scope_count && frame_count < MAX_STACK_DEPTH; ++i) {
-            // Iterate so scope_stack[0] (outermost) ends up at the highest
-            // frame index — intern_stack_trace processes high indices first
-            // and makes them the root of the call tree.
-            auto const& scope = stack.at(scope_count - 1 - i);
-            auto& frame = tick.frames[frame_count++];
-            frame.executable = 0;
-            frame.program_counter = static_cast<u32>(to_underlying(scope.category));
-            frame.name = Utf16FlyString {};
-            frame.marker_name_ptr = scope.name.characters_without_null_termination();
-            frame.marker_name_len = static_cast<u32>(scope.name.length());
+    u32 frame_count = 0;
+    auto* state = Core::t_profiler_state;
+    if (!state) {
+        tick.frame_count = 0;
+        return;
+    }
+
+    auto const& stack = state->profiling_stack;
+    auto const stack_size = stack.size();
+
+    for (u32 i = 0; i < stack_size && frame_count < MAX_STACK_DEPTH; ++i) {
+        // Highest index = most recently pushed = innermost frame.
+        auto const& src = stack.at(stack_size - 1 - i);
+        auto& dst = tick.frames[frame_count++];
+
+        if (src.js_context != nullptr) {
+            // JS frame. js_context points at a live ExecutionContext on
+            // the interpreter stack — read its executable through the
+            // pointer so we see the latest value (the script context is
+            // pushed *before* run_executable assigns context.executable).
+            auto const* ec = static_cast<ExecutionContext const*>(src.js_context);
+            auto const* executable = ec->executable.ptr();
+            if (!executable) {
+                // Context is on the interpreter stack but its executable
+                // hasn't been bound yet — skip this frame in the sample.
+                --frame_count;
+                continue;
+            }
+
+            // Reject obviously bad pointers (GC cells are 8-byte aligned).
+            if (bit_cast<uintptr_t>(executable) & 0x7) {
+                --frame_count;
+                continue;
+            }
+
+            // Topmost frame: prefer the register-derived leaf PC when the
+            // platform sampler supplied one (macOS Mach / Linux ucontext),
+            // since exec_ctx->program_counter may lag the ASM interpreter
+            // by a few instructions.
+            u32 program_counter;
+            if (frame_count == 1 && leaf_program_counter.has_value())
+                program_counter = *leaf_program_counter;
+            else if (src.pc_ptr != nullptr)
+                program_counter = *src.pc_ptr;
+            else
+                program_counter = 0;
+
+            dst.executable = bit_cast<FlatPtr>(executable);
+            dst.program_counter = program_counter;
+            dst.name = executable->name;
+            dst.marker_name_ptr = nullptr;
+            dst.marker_name_len = 0;
+        } else {
+            // Label frame.
+            dst.executable = 0;
+            dst.program_counter = static_cast<u32>(to_underlying(src.category));
+            dst.name = Utf16FlyString {};
+            dst.marker_name_ptr = src.name.characters_without_null_termination();
+            dst.marker_name_len = static_cast<u32>(src.name.length());
         }
     }
 
@@ -249,52 +251,66 @@ void JSStackSampler::process_raw_samples()
     }
 }
 
-// Capture a JS call stack snapshot suitable for attaching to a marker.
-// Walks the execution context stack from leaf to root.
+// Capture a stack snapshot suitable for the gecko marker `cause` field by
+// walking the unified profiling stack. Includes both JS frames and label
+// frames in the order they were pushed, so a marker fired while no JS is
+// running still gets a meaningful cause from the active label scopes.
 //
-// CRITICAL: Only safe to call from the JS main thread. The execution context
-// stack is owned by that thread and not synchronized. Markers emitted from
-// other threads (e.g. media decoder workers) must NOT call this — we'd race
-// against the main thread modifying the stack.
+// Safe to call from any thread that has its own ThreadProfilerState — the
+// fixed profiling stack is per-thread and only the owning thread writes to
+// it. Allocates per call (we materialize String location names) so it must
+// only be called outside the signal-safe path.
 void JSStackSampler::capture_marker_stack(Vector<Core::MarkerStackFrame, 8>& out)
 {
     out.clear_with_capacity();
 
-    // Skip if we're not on the JS main thread.
-    if (!pthread_equal(pthread_self(), m_js_thread))
+    auto* state = Core::t_profiler_state;
+    if (!state)
         return;
 
-    auto const& ec_stack = m_vm.execution_context_stack();
-    auto const stack_size = ec_stack.size();
+    auto const& stack = state->profiling_stack;
+    auto const stack_size = stack.size();
 
-    for (ssize_t i = static_cast<ssize_t>(stack_size) - 1; i >= 0 && out.size() < MAX_STACK_DEPTH; --i) {
-        auto* ctx = ec_stack[i];
-        if (!ctx)
-            continue;
-        auto const* executable = ctx->executable.ptr();
-        if (!executable)
-            continue;
+    for (u32 i = 0; i < stack_size && out.size() < MAX_STACK_DEPTH; ++i) {
+        // Highest index = most recently pushed = innermost (leaf) frame.
+        auto const& src = stack.at(stack_size - 1 - i);
 
+        String location;
         u32 line = 0;
         u32 column = 0;
-        String filename;
-        if (ctx->program_counter < executable->bytecode.size()) {
-            auto unrealized = executable->source_range_at(ctx->program_counter);
-            if (unrealized.source_code) {
-                auto range = unrealized.realize();
-                line = range.start.line;
-                column = range.start.column;
-                filename = MUST(String::from_byte_string(range.filename()));
+
+        if (src.js_context != nullptr) {
+            // JS frame — read the executable through the live context.
+            auto const* ec = static_cast<ExecutionContext const*>(src.js_context);
+            auto const* executable = ec->executable.ptr();
+            if (!executable)
+                continue;
+            if (bit_cast<uintptr_t>(executable) & 0x7)
+                continue;
+
+            String filename;
+            u32 program_counter = src.pc_ptr ? *src.pc_ptr : 0;
+            if (program_counter < executable->bytecode.size()) {
+                auto unrealized = executable->source_range_at(program_counter);
+                if (unrealized.source_code) {
+                    auto range = unrealized.realize();
+                    line = range.start.line;
+                    column = range.start.column;
+                    filename = MUST(String::from_byte_string(range.filename()));
+                }
             }
+
+            String function_name = executable->name.is_empty()
+                ? "(anonymous)"_string
+                : MUST(String::formatted("{}", executable->name));
+
+            location = filename.is_empty()
+                ? function_name
+                : MUST(String::formatted("{} ({}:{}:{})", function_name, filename, line, column));
+        } else {
+            // Label frame.
+            location = MUST(String::from_utf8(src.name));
         }
-
-        String function_name = executable->name.is_empty()
-            ? "(anonymous)"_string
-            : MUST(String::formatted("{}", executable->name));
-
-        String location = filename.is_empty()
-            ? function_name
-            : MUST(String::formatted("{} ({}:{}:{})", function_name, filename, line, column));
 
         out.append({ move(location), line, column });
     }

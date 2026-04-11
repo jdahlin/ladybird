@@ -16,13 +16,30 @@
 
 namespace Core {
 
-// One entry on the FixedProfilingStack. The name is a raw StringView because
-// PROFILER_LABEL must be callable from contexts that cannot allocate (signal
-// handlers observe the stack from the sampler side). Callers MUST pass a
-// string literal or other memory that outlives the scope.
+// One entry on the FixedProfilingStack. Two flavors share the same slot:
+//
+//   - Label frames carry a literal name + category. PROFILER_LABEL and
+//     MARKER_SCOPE push these. `js_context` is null.
+//
+//   - JS frames carry an opaque pointer to a JS::ExecutionContext (which
+//     LibCore intentionally doesn't know about) plus a pointer to the live
+//     ExecutionContext::program_counter. Pushed and popped by the bytecode
+//     interpreter at every JS function entry/exit so the unified stack
+//     interleaves correctly with label scopes — that's what makes JS↔C++
+//     alternation render right in the call tree. The sampler reads the
+//     executable from the live ExecutionContext at sample time, which
+//     handles the case where the context is pushed before its executable
+//     field is assigned.
+//
+// All fields must be readable from a signal handler: no allocation, no
+// refcount bumps. The ExecutionContext lives as long as the profiling
+// stack frame because both are managed by the JS interpreter — push and
+// pop are structurally symmetric.
 struct ProfilingStackFrame {
     StringView name;
     MarkerCategory category;
+    void const* js_context { nullptr };
+    u32 const* pc_ptr { nullptr };
 };
 
 // Signal-safe fixed-capacity stack of active profiler labels.
@@ -43,7 +60,22 @@ public:
             ++m_overflow_depth;
             return;
         }
-        m_frames[current] = { name, category };
+        m_frames[current] = { name, category, nullptr, nullptr };
+        m_size.store(current + 1, AK::MemoryOrder::memory_order_release);
+    }
+
+    // JS frame push: stores an opaque ExecutionContext pointer and a
+    // pointer to the live ExecutionContext::program_counter. The
+    // interpreter writes the PC field on every dispatch, so the sampler
+    // reads the current value by dereferencing pc_ptr.
+    ALWAYS_INLINE void push_js(void const* js_context, u32 const* pc_ptr)
+    {
+        auto current = m_size.load(AK::MemoryOrder::memory_order_relaxed);
+        if (current >= CAPACITY) {
+            ++m_overflow_depth;
+            return;
+        }
+        m_frames[current] = { {}, MarkerCategory::JavaScript, js_context, pc_ptr };
         m_size.store(current + 1, AK::MemoryOrder::memory_order_release);
     }
 

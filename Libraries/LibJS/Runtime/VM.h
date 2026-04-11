@@ -15,10 +15,12 @@
 #include <AK/RefCounted.h>
 #include <AK/StackInfo.h>
 #include <AK/Variant.h>
+#include <LibCore/Profiler/Label.h>
 #include <LibCrypto/Forward.h>
 #include <LibGC/Function.h>
 #include <LibGC/Heap.h>
 #include <LibGC/RootVector.h>
+#include <LibJS/Bytecode/Executable.h>
 #include <LibJS/CyclicModule.h>
 #include <LibJS/Export.h>
 #include <LibJS/ModuleLoading.h>
@@ -130,12 +132,14 @@ public:
             return throw_completion<InternalError>(ErrorType::CallStackSizeExceeded);
         }
         m_execution_context_stack.append(&context);
+        push_js_profiling_frame(context);
         return {};
     }
 
     void push_execution_context(ExecutionContext& context)
     {
         m_execution_context_stack.append(&context);
+        push_js_profiling_frame(context);
     }
 
     void set_js_stack_sampler(JSStackSampler* sampler) { m_js_stack_sampler = sampler; }
@@ -143,7 +147,27 @@ public:
 
     void pop_execution_context()
     {
+        pop_js_profiling_frame(*m_execution_context_stack.last());
         m_execution_context_stack.take_last();
+    }
+
+    // Push/pop a JS profiling stack frame for this execution context.
+    // Always pushes and always pops so the call/return pairing stays
+    // structurally symmetric. The sampler reads the live executable
+    // from the stored ExecutionContext pointer at sample time, so it
+    // doesn't matter whether the executable field is set before or
+    // after the push (Interpreter::run pushes the script context
+    // before run_executable assigns its executable, for example).
+    ALWAYS_INLINE static void push_js_profiling_frame(ExecutionContext& context)
+    {
+        if (auto* state = Core::t_profiler_state)
+            state->profiling_stack.push_js(&context, &context.program_counter);
+    }
+
+    ALWAYS_INLINE static void pop_js_profiling_frame(ExecutionContext&)
+    {
+        if (auto* state = Core::t_profiler_state)
+            state->profiling_stack.pop();
     }
 
     // https://tc39.es/ecma262/#running-execution-context

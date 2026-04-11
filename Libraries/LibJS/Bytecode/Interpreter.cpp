@@ -306,6 +306,11 @@ ExecutionContext* Interpreter::push_inline_frame(
     else
         ec_stack.append(callee_context);
 
+    // Mirror the push onto the unified profiling stack so JS frames
+    // interleave correctly with PROFILER_LABEL scopes. The matching pop
+    // happens in pop_inline_frame -> vm.pop_execution_context.
+    JS::VM::push_js_profiling_frame(*callee_context);
+
     // Bind this if the function uses it.
     if (callee_function.uses_this())
         callee_function.ordinary_call_bind_this(vm(), *callee_context, this_value);
