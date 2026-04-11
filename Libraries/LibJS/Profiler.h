@@ -58,42 +58,11 @@ public:
     Vector<Core::ProfiledStack> const& stack_table() const { return m_profiled_thread->stack_table; }
     Vector<Core::ProfiledSample> const& samples() const { return m_profiled_thread->samples; }
 
-    struct NetworkTimings {
-        double domain_lookup_start_ms { 0 };
-        double domain_lookup_end_ms { 0 };
-        double connect_start_ms { 0 };
-        double tcp_connect_end_ms { 0 };
-        double secure_connection_start_ms { 0 };
-        double connect_end_ms { 0 };
-        double request_start_ms { 0 };
-        double response_start_ms { 0 };
-        double response_end_ms { 0 };
-    };
-
-    // Network markers: two per request (STATUS_START + STATUS_STOP) linked by id.
-    // Raw data is stored and serialized only during gecko profile export.
-    struct NetworkMarker {
-        u64 id;
-        String url;
-        String method;
-        double start_time_ms;
-        double end_time_ms;
-        bool is_stop { false };
-        u32 status_code { 0 };
-        String content_type;
-        i64 body_size { 0 };
-        NetworkTimings timings;
-    };
-    Vector<NetworkMarker> const& network_markers() const { return m_network_markers; }
-
-    void add_network_request_start(u64 id, String url, String method, double start_time_ms);
-    void add_network_request_stop(u64 id, String url, String method, double start_time_ms, double end_time_ms,
-        u32 status_code, String content_type, i64 body_size, NetworkTimings const&);
-
     double elapsed_ms_since_start() const;
     int interval_us() const { return m_interval_us; }
     i64 start_time_epoch_ms() const;
     i64 stop_time_epoch_ms() const;
+    MonotonicTime start_time() const { return m_start_time; }
     u64 os_tid() const;
 
     // Walk the JS execution context stack and produce a list of frame names.
@@ -177,8 +146,6 @@ private:
     // then consumed by sample_if_needed() at the next safe bytecode boundary.
     Atomic<bool> m_sample_pending { false };
     bool m_platform_sampling_active { false };
-
-    Vector<NetworkMarker> m_network_markers;
 };
 
 inline i64 Profiler::start_time_epoch_ms() const

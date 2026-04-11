@@ -11,6 +11,7 @@
 #include <AK/JsonValue.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/Export.h>
 #include <LibCore/Profiler/ProfilerSession.h>
 #include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/Timer.h>
@@ -19,7 +20,6 @@
 #include <LibHTTP/Cookie/ParsedCookie.h>
 #include <LibIPC/TransportHandle.h>
 #include <LibJS/Console.h>
-#include <LibJS/GeckoProfileWriter.h>
 #include <LibJS/Profiler.h>
 #include <LibJS/Runtime/ConsoleObject.h>
 #include <LibThreading/ThreadPool.h>
@@ -838,7 +838,7 @@ void PageClient::page_did_start_network_request(u64 request_id, URL::URL const& 
                                                        .status_code = 0,
                                                        .content_type = {},
                                                    });
-        m_profiler->add_network_request_start(request_id, url.serialize(), MUST(String::from_byte_string(method)), start_ms);
+        m_profiler_session->network_markers().add_request_start(request_id, url.serialize(), MUST(String::from_byte_string(method)), start_ms);
     }
 }
 
@@ -902,6 +902,7 @@ void PageClient::start_profiling(u32 interval_us)
     m_profiler->set_profiled_thread(profiled_thread);
     vm.set_profiler(m_profiler.ptr());
     m_profiler->start();
+    m_profiler_session->set_timing(m_profiler->start_time(), m_profiler->start_time_epoch_ms(), interval_us);
 
     // Connect the profiler to the marker collector so each marker captures
     // the JS call stack at emit time. This populates the "cause" field on
@@ -1000,7 +1001,8 @@ void PageClient::stop_profiling()
         m_counter_sample_timer = nullptr;
     }
 
-    auto json = JS::write_gecko_profile(*m_profiler, &m_profiler_session->markers());
+    m_profiler_session->set_stop_epoch_ms(UnixDateTime::now().milliseconds_since_epoch());
+    auto json = Core::write_gecko_profile(*m_profiler_session);
     m_profiler = nullptr;
     m_profiler_session = nullptr;
 
@@ -1025,7 +1027,7 @@ void PageClient::page_did_finish_network_request(u64 request_id, u64 body_size, 
                 return req.start_time_ms + static_cast<double>(us - timing_info.domain_lookup_start_microseconds) / 1000.0;
             };
 
-            m_profiler->add_network_request_stop(
+            m_profiler_session->network_markers().add_request_stop(
                 request_id,
                 req.url,
                 req.method,

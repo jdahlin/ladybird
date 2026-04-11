@@ -9,10 +9,12 @@
 #include <AK/HashMap.h>
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
+#include <AK/Time.h>
 #include <AK/Vector.h>
 #include <LibCore/Export.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/NetworkMarkerStore.h>
 #include <LibCore/Profiler/ProfiledThread.h>
 
 namespace Core {
@@ -49,12 +51,36 @@ public:
     Vector<OwnPtr<ProfiledThread>>& profiled_threads() { return m_profiled_threads; }
     Vector<OwnPtr<ProfiledThread>> const& profiled_threads() const { return m_profiled_threads; }
 
+    // Session timing metadata. Owners (PageClient, js CLI) stamp these
+    // at start/stop time so the gecko exporter can compute sample and
+    // marker times relative to the session start.
+    void set_timing(MonotonicTime start, i64 start_epoch_ms, int interval_us)
+    {
+        m_start_time = start;
+        m_start_epoch_ms = start_epoch_ms;
+        m_interval_us = interval_us;
+    }
+    void set_stop_epoch_ms(i64 ms) { m_stop_epoch_ms = ms; }
+    MonotonicTime start_time() const { return m_start_time; }
+    i64 start_epoch_ms() const { return m_start_epoch_ms; }
+    i64 stop_epoch_ms() const { return m_stop_epoch_ms; }
+    int interval_us() const { return m_interval_us; }
+
+    NetworkMarkerStore& network_markers() { return m_network_markers; }
+    NetworkMarkerStore const& network_markers() const { return m_network_markers; }
+
 private:
     MarkerCollector m_markers;
     String m_process_name;
     String m_process_type;
     HashMap<String, CounterSeries> m_counters;
     Vector<OwnPtr<ProfiledThread>> m_profiled_threads;
+    NetworkMarkerStore m_network_markers;
+
+    MonotonicTime m_start_time { MonotonicTime::now() };
+    i64 m_start_epoch_ms { 0 };
+    i64 m_stop_epoch_ms { 0 };
+    int m_interval_us { 0 };
 };
 
 // Global pointer — null when no session is active. Set in the

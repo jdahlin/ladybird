@@ -14,13 +14,13 @@
 #include <LibCore/ConfigFile.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/Export.h>
 #include <LibCore/Profiler/ProfilerSession.h>
 #include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibCore/StandardPaths.h>
 #include <LibJS/Bytecode/Interpreter.h>
 #include <LibJS/Console.h>
 #include <LibJS/Contrib/Test262/GlobalObject.h>
-#include <LibJS/GeckoProfileWriter.h>
 #include <LibJS/Print.h>
 #include <LibJS/Profiler.h>
 #include <LibJS/Runtime/ConsoleObject.h>
@@ -972,6 +972,7 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             profiler->set_profiled_thread(profiled_thread);
             g_vm->set_profiler(profiler.ptr());
             profiler->start();
+            profiler_session->set_timing(profiler->start_time(), profiler->start_time_epoch_ms(), interval_us);
 
             // Connect the profiler to the marker collector so each marker captures
             // the JS call stack at emit time.
@@ -987,7 +988,8 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
         if (profiler) {
             profiler->stop();
             g_vm->set_profiler(nullptr);
-            auto json = JS::write_gecko_profile(*profiler, &profiler_session->markers());
+            profiler_session->set_stop_epoch_ms(UnixDateTime::now().milliseconds_since_epoch());
+            auto json = Core::write_gecko_profile(*profiler_session);
             profiler_session = nullptr;
             auto file = TRY(Core::File::open(profile_output, Core::File::OpenMode::Write));
             TRY(file->write_until_depleted(json.bytes()));

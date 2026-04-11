@@ -14,8 +14,10 @@ set(SOURCES
     MappedFile.cpp
     MarkerCollector.cpp
     Profiler/CounterRegistry.cpp
+    Profiler/Export.cpp
     Profiler/Label.cpp
     Profiler/LabelOnlyStackSampler.cpp
+    Profiler/NetworkMarkerStore.cpp
     Profiler/ProfiledThread.cpp
     Profiler/ProfilerSession.cpp
     Profiler/ThreadRegistry.cpp

@@ -8,8 +8,10 @@
 #include <AK/JsonParser.h>
 #include <AK/Platform.h>
 #include <AK/Utf16String.h>
+#include <LibCore/Profiler/Export.h>
+#include <LibCore/Profiler/ProfilerSession.h>
+#include <LibCore/Profiler/ThreadRegistry.h>
 #include <LibJS/Bytecode/Interpreter.h>
-#include <LibJS/GeckoProfileWriter.h>
 #include <LibJS/Profiler.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/NativeFunction.h>
@@ -166,10 +168,15 @@ TEST_CASE(profiler_gecko_json_is_valid)
     auto root_execution_context = JS::create_simple_execution_context<JS::GlobalObject>(*vm);
     auto& realm = *root_execution_context->realm;
 
+    Core::ProfilerSession session;
+    auto& profiled_thread = session.create_profiled_thread("Main"_string);
+
     JS::Profiler profiler(*vm, 0);
+    profiler.set_profiled_thread(profiled_thread);
     vm->set_profiler(&profiler);
     install_request_sample_function(realm, profiler);
     profiler.start();
+    session.set_timing(profiler.start_time(), profiler.start_time_epoch_ms(), 0);
     run_js(*vm, realm, R"js(
 requestSample();
 let sum = 0;
@@ -179,10 +186,11 @@ for (let i = 0; i < 500000; i++)
         "profiler-gecko.js"sv);
     profiler.stop();
     vm->set_profiler(nullptr);
+    Core::profiler_thread_register("Main"sv);
 
     EXPECT(profiler.samples().size() > 0u);
 
-    auto json_string = JS::write_gecko_profile(profiler);
+    auto json_string = Core::write_gecko_profile(session);
     EXPECT(!json_string.is_empty());
 
     auto parsed = JsonParser::parse(json_string);
