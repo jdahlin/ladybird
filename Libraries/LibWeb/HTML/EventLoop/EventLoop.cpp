@@ -72,8 +72,80 @@ static StringView task_source_marker_name(Task::Source source)
         return "Task: Canvas Blob"sv;
     case Task::Source::Clipboard:
         return "Task: Clipboard"sv;
+    case Task::Source::Permissions:
+        return "Task: Permissions"sv;
+    case Task::Source::FontLoading:
+        return "Task: Font Loading"sv;
+    case Task::Source::RemoteEvent:
+        return "Task: Remote Event"sv;
+    case Task::Source::Rendering:
+        return "Task: Rendering"sv;
+    case Task::Source::DatabaseAccess:
+        return "Task: Database"sv;
+    case Task::Source::WebSocket:
+        return "Task: WebSocket"sv;
+    case Task::Source::MediaCapabilities:
+        return "Task: Media Capabilities"sv;
+    case Task::Source::Gamepad:
+        return "Task: Gamepad"sv;
+    case Task::Source::WebGL:
+        return "Task: WebGL"sv;
+    case Task::Source::Crypto:
+        return "Task: Crypto"sv;
+    case Task::Source::UniqueTaskSourceStart:
     default:
-        return "Task"sv;
+        // Per-instance unique task sources (HTMLMediaElement etc.) fall
+        // through here. Their values are >= UniqueTaskSourceStart.
+        return "Task: Unique"sv;
+    }
+}
+
+// Map task sources to marker categories so the marker chart picks the
+// right color: Idle tasks render white (transparent), DOM/Network/Timer
+// tasks pick up their category color, etc. Without this all tasks land
+// in the Other (grey) bucket.
+static Core::MarkerCategory task_source_marker_category(Task::Source source)
+{
+    switch (source) {
+    case Task::Source::IdleTask:
+        return Core::MarkerCategory::Idle;
+    case Task::Source::DOMManipulation:
+    case Task::Source::UserInteraction:
+    case Task::Source::HistoryTraversal:
+    case Task::Source::NavigationAndTraversal:
+    case Task::Source::IntersectionObserver:
+    case Task::Source::Clipboard:
+    case Task::Source::Permissions:
+    case Task::Source::Gamepad:
+        return Core::MarkerCategory::DOM;
+    case Task::Source::Networking:
+    case Task::Source::WebSocket:
+    case Task::Source::RemoteEvent:
+        return Core::MarkerCategory::Network;
+    case Task::Source::TimerTask:
+        return Core::MarkerCategory::Timer;
+    case Task::Source::JavaScriptEngine:
+    case Task::Source::Microtask:
+    case Task::Source::Crypto:
+        return Core::MarkerCategory::JavaScript;
+    case Task::Source::BitmapTask:
+    case Task::Source::CanvasBlobSerializationTask:
+    case Task::Source::Rendering:
+    case Task::Source::WebGL:
+        return Core::MarkerCategory::Graphics;
+    case Task::Source::FontLoading:
+        return Core::MarkerCategory::Style;
+    case Task::Source::MediaCapabilities:
+        return Core::MarkerCategory::Media;
+    case Task::Source::DatabaseAccess:
+    case Task::Source::FileReading:
+    case Task::Source::PerformanceTimeline:
+    case Task::Source::Geolocation:
+    case Task::Source::PostedMessage:
+    case Task::Source::Unspecified:
+    case Task::Source::UniqueTaskSourceStart:
+    default:
+        return Core::MarkerCategory::Other;
     }
 }
 
@@ -195,7 +267,8 @@ void EventLoop::process()
 
         {
             auto source_name = task_source_marker_name(oldest_task->source());
-            MARKER_SCOPE_FIELDS(source_name, "Task"sv, Core::MarkerCategory::Other,
+            auto source_category = task_source_marker_category(oldest_task->source());
+            MARKER_SCOPE_FIELDS(source_name, "Task"sv, source_category,
                 { { "source"sv, source_name } });
 
             // 6. Perform oldestTask's steps.
