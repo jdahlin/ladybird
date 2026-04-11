@@ -913,7 +913,12 @@ void PageClient::start_profiling(u32 interval_us)
         });
 
     // Sample memory and CPU periodically. Counter graphs at the top of the timeline.
-    m_counter_sample_timer = Core::Timer::create_repeating(100, [] {
+    //
+    // profiler.firefox.com's accumulateCounterSamples() *sums* the per-sample
+    // `count` values to draw the graph — so each sample must be a *delta*
+    // from the previous one, not an absolute value. We track the previous
+    // emitted absolute value per series and emit (current - previous).
+    m_counter_sample_timer = Core::Timer::create_repeating(100, [previous_memory = i64 { 0 }, previous_process_cpu = i64 { 0 }, previous_thread_cpu = HashMap<u64, i64> {}]() mutable {
         // Process-wide memory: read VmRSS from /proc/self/status. This is the
         // CURRENT resident set size (in bytes). getrusage's ru_maxrss is the
         // peak — not what we want for a graph showing memory over time.
@@ -930,8 +935,11 @@ void PageClient::start_profiling(u32 interval_us)
                     if (space.has_value()) {
                         auto num_part = rest.substring_view(0, *space);
                         if (auto kb = num_part.to_number<u64>(); kb.has_value()) {
+                            i64 current_bytes = static_cast<i64>(kb.value()) * 1024;
+                            i64 delta = current_bytes - previous_memory;
+                            previous_memory = current_bytes;
                             Core::profiler_add_counter_sample("memory"sv, "Memory"sv, "Resident set size"sv,
-                                static_cast<i64>(kb.value()) * 1024, 0);
+                                delta, 0);
                         }
                     }
                     break;
@@ -942,10 +950,12 @@ void PageClient::start_profiling(u32 interval_us)
         // Process CPU time from getrusage. Sum of user + system in milliseconds.
         struct rusage usage;
         if (getrusage(RUSAGE_SELF, &usage) == 0) {
-            i64 cpu_us = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000000
-                + usage.ru_utime.tv_usec + usage.ru_stime.tv_usec;
+            i64 cpu_ms = (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000
+                + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000;
+            i64 delta = cpu_ms - previous_process_cpu;
+            previous_process_cpu = cpu_ms;
             Core::profiler_add_counter_sample("processCPU"sv, "CPU"sv, "Process CPU usage"sv,
-                cpu_us / 1000, 0);
+                delta, 0);
         }
 
         // Per-thread CPU from /proc/self/task/<tid>/stat (Linux-specific).
@@ -978,10 +988,13 @@ void PageClient::start_profiling(u32 interval_us)
             // Convert clock ticks to milliseconds. sysconf(_SC_CLK_TCK) is typically 100.
             static long const ticks_per_sec = sysconf(_SC_CLK_TCK);
             auto cpu_ms = static_cast<i64>((clock_ticks * 1000) / ticks_per_sec);
+            auto previous = previous_thread_cpu.get(tid).value_or(0);
+            i64 delta = cpu_ms - previous;
+            previous_thread_cpu.set(tid, cpu_ms);
 
             auto counter_name = MUST(String::formatted("threadCPU.{}", info.name));
             Core::profiler_add_counter_sample(counter_name.bytes_as_string_view(),
-                "CPU"sv, "Thread CPU usage"sv, cpu_ms, 0);
+                "CPU"sv, "Thread CPU usage"sv, delta, 0);
         }
     });
     m_counter_sample_timer->start();

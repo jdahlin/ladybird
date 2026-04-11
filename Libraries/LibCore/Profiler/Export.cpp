@@ -333,7 +333,10 @@ static JsonObject build_frame_table(ProfiledThread const& thread)
         move(data));
 }
 
-static JsonObject build_markers(ProfilerSession const& session, u64 thread_tid, bool include_network, JsonArray& string_table)
+// stack_target: when non-null, marker stacks are interned into this thread's
+// frame_table/stack_table and a `cause: { stack: <index> }` field is added to
+// the marker payload (matching Firefox's CauseBacktrace shape).
+static JsonObject build_markers(ProfilerSession const& session, u64 thread_tid, bool include_network, JsonArray& string_table, ProfiledThread* stack_target)
 {
     HashMap<String, i64> string_map;
     auto intern = [&](String const& str) -> i64 {
@@ -434,20 +437,25 @@ static JsonObject build_markers(ProfilerSession const& session, u64 thread_tid, 
                 [&](i64 i) { payload.set(field.key, static_cast<double>(i)); },
                 [&](bool b) { payload.set(field.key, b); });
         }
-        if (!m.stack.is_empty()) {
-            StringBuilder sb;
-            for (auto const& frame : m.stack) {
-                if (!sb.is_empty())
-                    sb.append('\n');
-                sb.append(frame.location);
+        bool const has_start = m.phase != MarkerPhase::IntervalEnd;
+        bool const has_end = m.phase == MarkerPhase::Interval || m.phase == MarkerPhase::IntervalEnd;
+
+        if (!m.stack.is_empty() && stack_target) {
+            Vector<ProfiledThread::MarkerStackFrameInput> frames;
+            frames.ensure_capacity(m.stack.size());
+            for (auto const& frame : m.stack)
+                frames.append({ frame.location, frame.line, frame.column });
+            if (auto stack_index = stack_target->intern_marker_stack(frames); stack_index.has_value()) {
+                JsonObject cause;
+                cause.set("tid"sv, thread_tid);
+                cause.set("time"sv, has_start ? to_relative_ms(m.start) : 0.0);
+                cause.set("stack"sv, *stack_index);
+                payload.set("cause"sv, move(cause));
             }
-            payload.set("stackTrace"sv, MUST(sb.to_string()));
         }
 
         JsonArray row;
         row.must_append(name_index);
-        bool has_start = m.phase != MarkerPhase::IntervalEnd;
-        bool has_end = m.phase == MarkerPhase::Interval || m.phase == MarkerPhase::IntervalEnd;
         row.must_append(has_start ? JsonValue(to_relative_ms(m.start)) : JsonValue {});
         row.must_append(has_end ? JsonValue(to_relative_ms(m.end)) : JsonValue {});
         row.must_append(static_cast<int>(m.phase));
@@ -488,13 +496,29 @@ static void populate_common_thread_fields(ProfilerSession const& session, JsonOb
 }
 
 // Build one gecko thread entry from a ProfiledThread.
-static JsonObject build_thread_from_profiled(ProfilerSession const& session, ProfiledThread const& profiled, u64 tid, bool is_main_thread, bool include_network)
+static JsonObject build_thread_from_profiled(ProfilerSession const& session, ProfiledThread& profiled, u64 tid, bool is_main_thread, bool include_network)
 {
+    // Pre-intern marker stacks into this thread's frame/stack tables BEFORE
+    // we snapshot string_table — intern_marker_stack appends to all three
+    // tables, so we need them to settle first.
+    for (auto const& m : session.markers().markers()) {
+        auto effective_tid = m.tid == 0 ? tid : m.tid;
+        if (effective_tid != tid)
+            continue;
+        if (m.stack.is_empty())
+            continue;
+        Vector<ProfiledThread::MarkerStackFrameInput> frames;
+        frames.ensure_capacity(m.stack.size());
+        for (auto const& frame : m.stack)
+            frames.append({ frame.location, frame.line, frame.column });
+        (void)profiled.intern_marker_stack(frames);
+    }
+
     JsonArray string_table;
     for (auto const& str : profiled.string_table)
         string_table.must_append(str);
 
-    auto markers = build_markers(session, tid, include_network, string_table);
+    auto markers = build_markers(session, tid, include_network, string_table, &profiled);
 
     JsonObject thread;
     populate_common_thread_fields(session, thread, profiled.name().bytes_as_string_view(), tid, is_main_thread);
@@ -512,7 +536,7 @@ static JsonObject build_thread_from_profiled(ProfilerSession const& session, Pro
 static JsonObject build_thread_markers_only(ProfilerSession const& session, u64 tid, StringView name)
 {
     JsonArray string_table;
-    auto markers = build_markers(session, tid, /* include_network = */ false, string_table);
+    auto markers = build_markers(session, tid, /* include_network = */ false, string_table, /* stack_target = */ nullptr);
 
     JsonObject thread;
     populate_common_thread_fields(session, thread, name, tid, /* is_main_thread = */ false);
@@ -549,7 +573,10 @@ static JsonArray build_threads(ProfilerSession const& session)
         if (tid == 0)
             continue;
         emitted_tids.set(tid);
-        threads.must_append(build_thread_from_profiled(session, *profiled, tid, /* is_main_thread = */ first, /* include_network = */ first));
+        // ProfiledThread is mutated (intern_marker_stack appends to its
+        // intern tables) — the session is being consumed at stop time, so
+        // const-stripping the dereference is safe.
+        threads.must_append(build_thread_from_profiled(session, const_cast<ProfiledThread&>(*profiled), tid, /* is_main_thread = */ first, /* include_network = */ first));
         first = false;
     }
 

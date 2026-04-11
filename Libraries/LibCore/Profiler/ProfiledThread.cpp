@@ -55,4 +55,30 @@ u32 ProfiledThread::intern_frame(String const& location, u32 line, u32 column, u
     return index;
 }
 
+Optional<u32> ProfiledThread::intern_marker_stack(Vector<MarkerStackFrameInput> const& frames_innermost_first)
+{
+    if (frames_innermost_first.is_empty())
+        return {};
+
+    // The gecko stack table is a linked list from leaf to root via prefix
+    // indices. Walk frames root-first (so the prefix of each link is the
+    // already-interned ancestor), matching JSStackSampler::intern_stack_trace.
+    Optional<u32> prefix;
+    auto category = static_cast<u8>(to_underlying(MarkerCategory::JavaScript));
+    for (ssize_t i = static_cast<ssize_t>(frames_innermost_first.size()) - 1; i >= 0; --i) {
+        auto const& f = frames_innermost_first[i];
+        auto frame_index = intern_frame(f.location, f.line, f.column, category);
+        u64 key = (static_cast<u64>(frame_index) << 32) | prefix.value_or(UINT32_MAX);
+        if (auto it = stack_map.find(key); it != stack_map.end()) {
+            prefix = it->value;
+            continue;
+        }
+        u32 stack_index = stack_table.size();
+        stack_table.append({ frame_index, prefix });
+        stack_map.set(key, stack_index);
+        prefix = stack_index;
+    }
+    return prefix;
+}
+
 }

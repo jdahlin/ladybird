@@ -74,8 +74,13 @@ void ConnectionBase::handle_messages()
         if (!is_open())
             dbgln("Handling message while connection closed: {}", message->message_name());
 
-        MARKER_SCOPE_FIELDS("IPC handle"sv, "IPCHandle"sv, Core::MarkerCategory::IPC,
-            { { "name"sv, message->message_name() } });
+        // message_name() returns a static string literal from generated
+        // IPC code — safe to use as the marker name StringView for the
+        // lifetime of the scope. Duplicating into the payload keeps the
+        // field searchable per the IPCHandle schema.
+        StringView const message_name { message->message_name(), strlen(message->message_name()) };
+        MARKER_SCOPE_FIELDS(message_name, "IPCHandle"sv, Core::MarkerCategory::IPC,
+            { { "name"sv, message_name } });
 
         auto handler_result = m_local_stub.handle(move(message));
         if (handler_result.is_error()) {

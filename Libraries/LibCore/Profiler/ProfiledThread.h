@@ -12,6 +12,7 @@
 #include <AK/Time.h>
 #include <AK/Vector.h>
 #include <LibCore/Export.h>
+#include <LibCore/MarkerCategory.h>
 
 namespace Core {
 
@@ -65,6 +66,18 @@ public:
     void clear();
     u32 intern_string(String const&);
     u32 intern_frame(String const& location, u32 line, u32 column, u8 category);
+
+    // Walk a list of marker stack frames (innermost first, as captured by
+    // JSStackSampler::capture_marker_stack) and intern them into this
+    // thread's frame_table / stack_table. Returns the stack-table index of
+    // the resulting top frame, suitable for the gecko `cause.stack` field.
+    // Returns Optional::none() for empty inputs.
+    struct MarkerStackFrameInput {
+        String location;
+        u32 line { 0 };
+        u32 column { 0 };
+    };
+    Optional<u32> intern_marker_stack(Vector<MarkerStackFrameInput> const& frames_innermost_first);
 
 private:
     String m_name;
