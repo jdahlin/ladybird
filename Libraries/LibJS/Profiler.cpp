@@ -21,7 +21,12 @@ static i64 current_epoch_ms()
 Profiler::Profiler(VM& vm, int interval_us)
     : m_vm(vm)
     , m_interval_us(interval_us)
+    , m_fallback_profiled_thread(make<Core::ProfiledThread>("Main"_string))
 {
+    // Safe default so reads through the profiler don't require start() to
+    // have run first (tests that stop() without start()). A real session
+    // overrides this via set_profiled_thread().
+    m_profiled_thread = m_fallback_profiled_thread.ptr();
 }
 
 Profiler::~Profiler()
@@ -43,6 +48,7 @@ void Profiler::request_sample_for_test()
 
 void Profiler::reset_state_for_start()
 {
+    VERIFY(m_profiled_thread);
     m_start_time = MonotonicTime::now();
     m_start_epoch_ms = current_epoch_ms();
     m_stop_epoch_ms = 0;
@@ -50,20 +56,13 @@ void Profiler::reset_state_for_start()
     m_raw_sample_count.store(0, AK::MemoryOrder::memory_order_relaxed);
     m_sample_pending.store(false, AK::MemoryOrder::memory_order_relaxed);
     m_raw_samples = new RawSample[MAX_RAW_SAMPLES];
-    m_string_table.clear();
-    m_string_map.clear();
-    m_frame_table.clear();
-    m_frame_map.clear();
-    m_stack_table.clear();
-    m_stack_map.clear();
-    m_samples.clear();
+    m_profiled_thread->clear();
 }
 
 void Profiler::reserve_output_tables()
 {
-    m_string_table.ensure_capacity(256);
-    m_frame_table.ensure_capacity(256);
-    m_stack_table.ensure_capacity(1024);
+    VERIFY(m_profiled_thread);
+    m_profiled_thread->reserve_capacity();
 }
 
 void Profiler::allocate_raw_samples()
@@ -204,14 +203,15 @@ void Profiler::capture_sample(Optional<u32> leaf_program_counter)
 
 void Profiler::process_raw_samples()
 {
+    VERIFY(m_profiled_thread);
     auto count = min(m_raw_sample_count.load(AK::MemoryOrder::memory_order_relaxed), MAX_RAW_SAMPLES);
-    m_samples.ensure_capacity(count);
+    m_profiled_thread->samples.ensure_capacity(count);
 
     for (u32 i = 0; i < count; ++i) {
         auto const& tick = m_raw_samples[i];
         if (tick.frame_count == 0 || tick.frame_count > MAX_STACK_DEPTH)
             continue;
-        m_samples.append({ tick.time_ms, intern_stack_trace(tick) });
+        m_profiled_thread->samples.append({ tick.time_ms, intern_stack_trace(tick) });
     }
 }
 
@@ -346,43 +346,20 @@ u32 Profiler::intern_stack_trace(RawSample const& tick)
             // JS frames stay JavaScript category.
         }
 
-        auto frame_index = intern_frame(location, line, column, category);
+        auto frame_index = m_profiled_thread->intern_frame(location, line, column, category);
         u64 key = (static_cast<u64>(frame_index) << 32) | prefix.value_or(UINT32_MAX);
 
-        if (auto it = m_stack_map.find(key); it != m_stack_map.end()) {
+        if (auto it = m_profiled_thread->stack_map.find(key); it != m_profiled_thread->stack_map.end()) {
             prefix = it->value;
         } else {
-            u32 stack_index = m_stack_table.size();
-            m_stack_table.append({ frame_index, prefix });
-            m_stack_map.set(key, stack_index);
+            u32 stack_index = m_profiled_thread->stack_table.size();
+            m_profiled_thread->stack_table.append({ frame_index, prefix });
+            m_profiled_thread->stack_map.set(key, stack_index);
             prefix = stack_index;
         }
     }
 
     return prefix.value_or(0);
-}
-
-u32 Profiler::intern_string(String const& str)
-{
-    if (auto it = m_string_map.find(str); it != m_string_map.end())
-        return it->value;
-    u32 index = m_string_table.size();
-    m_string_table.append(str);
-    m_string_map.set(str, index);
-    return index;
-}
-
-u32 Profiler::intern_frame(String const& location, u32 line, u32 column, u8 category)
-{
-    // The location string encodes function name + source position, so string_index
-    // is a unique key for each distinct (function, file, line, col) combination.
-    auto string_index = intern_string(location);
-    if (auto it = m_frame_map.find(string_index); it != m_frame_map.end())
-        return it->value;
-    u32 index = m_frame_table.size();
-    m_frame_table.append({ string_index, line, column, category });
-    m_frame_map.set(string_index, index);
-    return index;
 }
 
 }

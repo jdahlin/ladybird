@@ -7,10 +7,13 @@
 #pragma once
 
 #include <AK/HashMap.h>
+#include <AK/OwnPtr.h>
 #include <AK/String.h>
+#include <AK/Vector.h>
 #include <LibCore/Export.h>
 #include <LibCore/MarkerCollector.h>
 #include <LibCore/Profiler/CounterRegistry.h>
+#include <LibCore/Profiler/ProfiledThread.h>
 
 namespace Core {
 
@@ -39,11 +42,19 @@ public:
     HashMap<String, CounterSeries>& counter_storage() { return m_counters; }
     HashMap<String, CounterSeries> const& counter_storage() const { return m_counters; }
 
+    // Profiled threads — one per actively sampled thread. Today only the
+    // JS main thread gets an entry; step 5 adds label-only samplers and
+    // profiled threads for ThreadPool workers, process mains, etc.
+    ProfiledThread& create_profiled_thread(String name);
+    Vector<OwnPtr<ProfiledThread>>& profiled_threads() { return m_profiled_threads; }
+    Vector<OwnPtr<ProfiledThread>> const& profiled_threads() const { return m_profiled_threads; }
+
 private:
     MarkerCollector m_markers;
     String m_process_name;
     String m_process_type;
     HashMap<String, CounterSeries> m_counters;
+    Vector<OwnPtr<ProfiledThread>> m_profiled_threads;
 };
 
 // Global pointer — null when no session is active. Set in the

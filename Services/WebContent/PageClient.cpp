@@ -897,7 +897,9 @@ void PageClient::start_profiling(u32 interval_us)
     // collector now (instead of lazily on first use, which may be after profiling stops).
     Threading::ThreadPool::the().submit([] { });
 
+    auto& profiled_thread = m_profiler_session->create_profiled_thread("Main"_string);
     m_profiler = make<JS::Profiler>(vm, interval_us);
+    m_profiler->set_profiled_thread(profiled_thread);
     vm.set_profiler(m_profiler.ptr());
     m_profiler->start();
 

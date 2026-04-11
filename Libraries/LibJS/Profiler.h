@@ -8,11 +8,13 @@
 
 #include <AK/Atomic.h>
 #include <AK/HashMap.h>
+#include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/Time.h>
 #include <AK/Utf16FlyString.h>
 #include <AK/Vector.h>
 #include <LibCore/MarkerCollector.h>
+#include <LibCore/Profiler/ProfiledThread.h>
 #include <LibJS/Export.h>
 #include <LibJS/Forward.h>
 #include <LibThreading/Thread.h>
@@ -26,6 +28,18 @@ public:
     explicit Profiler(VM&, int interval_us = 1000);
     ~Profiler();
 
+    // Output destination for sampled frames/stacks. Must be set before
+    // start(). Usually points at a ProfiledThread owned by the
+    // ProfilerSession; if unset, the profiler keeps an owned fallback so
+    // tests and ad-hoc embeddings don't have to plumb a session.
+    void set_profiled_thread(Core::ProfiledThread& thread)
+    {
+        m_profiled_thread = &thread;
+        m_fallback_profiled_thread = nullptr;
+    }
+    Core::ProfiledThread* profiled_thread() { return m_profiled_thread; }
+    Core::ProfiledThread const* profiled_thread() const { return m_profiled_thread; }
+
     void start();
     void stop();
 
@@ -36,25 +50,13 @@ public:
     bool supports_timed_sampling() const;
     bool needs_bytecode_safe_points() const;
 
-    struct Frame {
-        u32 string_index;
-        u32 line;
-        u32 column;
-        u8 category; // Core::MarkerCategory underlying value (default JavaScript = 3)
-    };
-    struct Stack {
-        u32 frame_index;
-        Optional<u32> prefix;
-    };
-    struct Sample {
-        double time_ms;
-        u32 stack_index;
-    };
-
-    Vector<String> const& string_table() const { return m_string_table; }
-    Vector<Frame> const& frame_table() const { return m_frame_table; }
-    Vector<Stack> const& stack_table() const { return m_stack_table; }
-    Vector<Sample> const& samples() const { return m_samples; }
+    // Forward to the output ProfiledThread when one is set, so callers
+    // (gecko exporter, tests) keep reading the sampled state through the
+    // profiler during the step 4 transition.
+    Vector<String> const& string_table() const { return m_profiled_thread->string_table; }
+    Vector<Core::ProfiledFrame> const& frame_table() const { return m_profiled_thread->frame_table; }
+    Vector<Core::ProfiledStack> const& stack_table() const { return m_profiled_thread->stack_table; }
+    Vector<Core::ProfiledSample> const& samples() const { return m_profiled_thread->samples; }
 
     struct NetworkTimings {
         double domain_lookup_start_ms { 0 };
@@ -149,12 +151,15 @@ private:
     void collect_and_free_samples();
 
     void process_raw_samples();
-    u32 intern_string(String const&);
-    u32 intern_frame(String const& location, u32 line, u32 column, u8 category);
     u32 intern_stack_trace(RawSample const&);
 
     VM& m_vm;
     int m_interval_us;
+    Core::ProfiledThread* m_profiled_thread { nullptr };
+    // Owned fallback when no session-owned ProfiledThread has been supplied
+    // (used by the test harness and any ad-hoc embedding). Goes away once
+    // all callers plumb ProfilerSession through.
+    OwnPtr<Core::ProfiledThread> m_fallback_profiled_thread;
     ::MonotonicTime m_start_time { ::MonotonicTime::now() };
     i64 m_start_epoch_ms { 0 };
     i64 m_stop_epoch_ms { 0 };
@@ -171,14 +176,6 @@ private:
     struct sigaction m_old_sigaction {};
     bool m_platform_sampling_active { false };
 
-    Vector<String> m_string_table;
-    HashMap<String, u32> m_string_map;
-    Vector<Frame> m_frame_table;
-    // Key: string_index (location string uniquely encodes function + source position)
-    HashMap<u32, u32> m_frame_map;
-    Vector<Stack> m_stack_table;
-    HashMap<u64, u32> m_stack_map;
-    Vector<Sample> m_samples;
     Vector<NetworkMarker> m_network_markers;
 };
 

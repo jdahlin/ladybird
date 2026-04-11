@@ -967,7 +967,9 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
             Core::profiler_set_process_name("js"_string);
             Core::profiler_set_process_type("default"_string);
             Core::profiler_thread_register("Main"sv);
+            auto& profiled_thread = profiler_session->create_profiled_thread("Main"_string);
             profiler = make<JS::Profiler>(*g_vm, interval_us);
+            profiler->set_profiled_thread(profiled_thread);
             g_vm->set_profiler(profiler.ptr());
             profiler->start();
 

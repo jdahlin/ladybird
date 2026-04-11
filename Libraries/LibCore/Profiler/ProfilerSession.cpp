@@ -26,4 +26,12 @@ ProfilerSession::~ProfilerSession()
     g_profiler_session = nullptr;
 }
 
+ProfiledThread& ProfilerSession::create_profiled_thread(String name)
+{
+    auto thread = make<ProfiledThread>(move(name));
+    auto* raw = thread.ptr();
+    m_profiled_threads.append(move(thread));
+    return *raw;
+}
+
 }
