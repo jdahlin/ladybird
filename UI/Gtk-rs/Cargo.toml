@@ -1,0 +1,22 @@
+[package]
+name = "ladybird_gtk"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "ladybird"
+path = "src/main.rs"
+
+[target.'cfg(not(any(target_os = "windows", target_os = "macos")))'.dependencies]
+gtk = { package = "gtk4", version = "0.9", features = ["v4_18"] }
+adw = { package = "libadwaita", version = "0.7", features = ["v1_5"] }
+glib = "0.20"
+gio = "0.20"
+gdk = { package = "gdk4", version = "0.9", features = ["v4_18"] }
+graphene = { package = "graphene-rs", version = "0.20" }
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[lints]
+workspace = true

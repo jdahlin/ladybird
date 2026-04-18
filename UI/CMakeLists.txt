@@ -53,19 +53,47 @@ if (NOT TARGET ladybird)
     message(FATAL_ERROR "UI Framework selection must declare a ladybird target")
 endif()
 
-if (TARGET ladybird_impl)
-    set(LADYBIRD_TARGET ladybird_impl PUBLIC)
-else()
-    set(LADYBIRD_TARGET ladybird PRIVATE)
-endif()
-
 set(LADYBIRD_LIBS AK LibCore LibFileSystem LibGfx LibImageDecoderClient LibIPC LibJS LibMain LibWeb LibWebView LibRequests LibURL)
-target_link_libraries(${LADYBIRD_TARGET} PRIVATE ${LADYBIRD_LIBS})
-target_link_libraries(${LADYBIRD_TARGET} PRIVATE OpenSSL::Crypto OpenSSL::SSL)
 
-target_include_directories(${LADYBIRD_TARGET} ${CMAKE_CURRENT_BINARY_DIR})
-target_include_directories(${LADYBIRD_TARGET} ${LADYBIRD_SOURCE_DIR})
-target_include_directories(${LADYBIRD_TARGET} ${LADYBIRD_SOURCE_DIR}/Services/)
+get_target_property(_ladybird_imported ladybird IMPORTED)
+if (_ladybird_imported)
+    # Rust binary crate: the bridge static lib needs the Ladybird headers and symbols.
+    # Cargo links the actual .a files via build.rs using LADYBIRD_LINK_LIBS_FILE.
+    target_link_libraries(ladybird_gtk_bridge PRIVATE ${LADYBIRD_LIBS} OpenSSL::Crypto OpenSSL::SSL)
+    target_include_directories(ladybird_gtk_bridge PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${LADYBIRD_SOURCE_DIR}
+        ${LADYBIRD_SOURCE_DIR}/Services/
+    )
+
+    # Write absolute paths of each Ladybird lib to a file that cargo's build.rs reads at link time.
+    set(_ladybird_lib_paths "")
+    foreach(lib ${LADYBIRD_LIBS})
+        list(APPEND _ladybird_lib_paths "$<TARGET_FILE:${lib}>")
+    endforeach()
+    list(APPEND _ladybird_lib_paths
+        "$<TARGET_FILE:OpenSSL::Crypto>"
+        "$<TARGET_FILE:OpenSSL::SSL>"
+    )
+    string(JOIN "\n" _ladybird_libs_content ${_ladybird_lib_paths})
+    file(GENERATE
+        OUTPUT "${CMAKE_BINARY_DIR}/cargo/ladybird_link_libs.txt"
+        CONTENT "${_ladybird_libs_content}\n"
+    )
+else()
+    if (TARGET ladybird_impl)
+        set(LADYBIRD_TARGET ladybird_impl PUBLIC)
+    else()
+        set(LADYBIRD_TARGET ladybird PRIVATE)
+    endif()
+
+    target_link_libraries(${LADYBIRD_TARGET} PRIVATE ${LADYBIRD_LIBS})
+    target_link_libraries(${LADYBIRD_TARGET} PRIVATE OpenSSL::Crypto OpenSSL::SSL)
+
+    target_include_directories(${LADYBIRD_TARGET} ${CMAKE_CURRENT_BINARY_DIR})
+    target_include_directories(${LADYBIRD_TARGET} ${LADYBIRD_SOURCE_DIR})
+    target_include_directories(${LADYBIRD_TARGET} ${LADYBIRD_SOURCE_DIR}/Services/)
+endif()
 
 if(WIN32)
     target_link_libraries(${LADYBIRD_TARGET} LibDevTools)
@@ -101,7 +129,12 @@ endif()
 
 set(ladybird_helper_processes ImageDecoder RequestServer WebContent WebWorker)
 
-add_dependencies(ladybird ${ladybird_helper_processes})
+# For an imported binary (Rust app crate), build dependencies go on the build target.
+if (_ladybird_imported)
+    add_dependencies(ladybird-build ${ladybird_helper_processes})
+else()
+    add_dependencies(ladybird ${ladybird_helper_processes})
+endif()
 # FIXME: Increase support for building targets on Windows
 if (NOT WIN32)
     add_dependencies(WebDriver ladybird)

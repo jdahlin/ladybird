@@ -5,7 +5,7 @@ elseif (APPLE)
     set(_possible_guis "AppKit" "Qt")
     set(_default_gui "AppKit")
 else()
-    set(_possible_guis "Qt" "Gtk")
+    set(_possible_guis "Qt" "Gtk" "Gtk-rs")
     set(_default_gui "Qt")
 endif()
 
