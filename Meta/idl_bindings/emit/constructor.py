@@ -90,21 +90,7 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
     )
 
     if not interface.is_callback_interface:
-        # IDLGenerators.cpp:3118-3160 (generate_constructors). Empty case
-        # (interface.constructors is empty): emit the "not a constructor"
-        # throw stub.
-        if not interface.constructors:
-            g.append(
-                "\n"
-                "JS::ThrowCompletionOr<GC::Ref<JS::Object>> @constructor_class@::construct([[maybe_unused]] FunctionObject& new_target)\n"
-                "{\n"
-                '    WebIDL::log_trace(vm(), "@constructor_class@::construct");\n'
-                "\n"
-                '    return vm().throw_completion<JS::TypeError>(JS::ErrorType::NotAConstructor, "@namespaced_name@");\n'
-                "}\n"
-            )
-        else:
-            raise NotImplementedError("constructors are not yet supported on this rung")
+        _generate_constructors(interface, g)
 
     # IDLGenerators.cpp:5680-5688: initialize() opener.
     g.append(
@@ -168,3 +154,129 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
 
     # IDLGenerators.cpp:5782-5783 — trailing blank line in raw string.
     g.append("\n")
+
+
+# Mirrors the shortest_length() helper inferred from get_function_shortest_length
+# in Libraries/LibIDL/Types.h. Returns the count of required (non-optional,
+# non-variadic) parameters.
+def _shortest_length(parameters) -> int:
+    return sum(1 for p in parameters if not p.optional and not p.variadic)
+
+
+def _generate_constructors(interface: Interface, generator: SourceGenerator) -> None:
+    """Port of generate_constructors (IDLGenerators.cpp:3118-3160).
+
+    Empty case: emit the throwing `construct` stub. Non-empty case:
+    iterate constructors, generate one body each.
+    """
+    if not interface.constructors:
+        # IDLGenerators.cpp:3139-3149 — `not a constructor` placeholder.
+        generator.append(
+            "\n"
+            "JS::ThrowCompletionOr<GC::Ref<JS::Object>> @constructor_class@::construct([[maybe_unused]] FunctionObject& new_target)\n"
+            "{\n"
+            '    WebIDL::log_trace(vm(), "@constructor_class@::construct");\n'
+            "\n"
+            '    return vm().throw_completion<JS::TypeError>(JS::ErrorType::NotAConstructor, "@namespaced_name@");\n'
+            "}\n"
+        )
+        return
+
+    # IDLGenerators.cpp:3120-3136 — compute shortest_length across all
+    # constructors and set it on the parent generator (so initialize()
+    # picks up the right number for `define_direct_property(length, ...)`).
+    has_html_constructor = any("HTMLConstructor" in c.extended_attributes for c in interface.constructors)
+    if has_html_constructor:
+        raise NotImplementedError("[HTMLConstructor] is not yet supported")
+
+    shortest = min(_shortest_length(c.parameters) for c in interface.constructors)
+    generator.set("constructor.length", str(shortest))
+
+    for ctor in interface.constructors:
+        _generate_constructor(ctor, interface, generator)
+    # generate_overload_arbiter for multi-constructor sets is added later.
+    if any(getattr(c, "is_overloaded", False) for c in interface.constructors):
+        raise NotImplementedError("constructor overload arbiter not yet supported")
+
+
+def _generate_constructor(constructor, interface: Interface, generator: SourceGenerator) -> None:
+    """Port of generate_constructor (IDLGenerators.cpp:3026-3116).
+
+    Currently only supports zero-parameter, non-HTMLConstructor cases.
+    """
+    if constructor.parameters:
+        raise NotImplementedError("constructor parameters are not yet supported")
+
+    g = generator.fork()
+    g.set("constructor_class", interface.constructor_class)
+    g.set("interface_fully_qualified_name", interface.fully_qualified_name)
+    g.set(
+        "overload_suffix",
+        str(getattr(constructor, "overload_index", 0)) if getattr(constructor, "is_overloaded", False) else "",
+    )
+    g.append(
+        "\n"
+        "JS::ThrowCompletionOr<GC::Ref<JS::Object>> @constructor_class@::construct@overload_suffix@([[maybe_unused]] FunctionObject& new_target)\n"
+        "{\n"
+        '    WebIDL::log_trace(vm(), "@constructor_class@::construct@overload_suffix@");\n'
+    )
+    g.append("\n    auto& vm = this->vm();\n    auto& realm = *vm.current_realm();\n")
+    g.append(
+        "\n"
+        "    // To internally create a new object implementing the interface @name@:\n"
+        "\n"
+        '    // 3.2. Let prototype be ? Get(newTarget, "prototype").\n'
+        "    auto prototype = TRY(new_target.get(vm.names.prototype));\n"
+        "\n"
+        "    // 3.3. If Type(prototype) is not Object, then:\n"
+        "    if (!prototype.is_object()) {\n"
+        "        // 1. Let targetRealm be ? GetFunctionRealm(newTarget).\n"
+        "        auto* target_realm = TRY(JS::get_function_realm(vm, new_target));\n"
+        "\n"
+        "        // 2. Set prototype to the interface prototype object for interface in targetRealm.\n"
+        "        VERIFY(target_realm);\n"
+        '        prototype = &Bindings::ensure_web_prototype<@prototype_class@>(*target_realm, "@namespaced_name@"_fly_string);\n'
+        "    }\n"
+        "\n"
+        "    // 4. Let instance be MakeBasicObject( « [[Prototype]], [[Extensible]], [[Realm]], [[PrimaryInterface]] »).\n"
+        "    // 5. Set instance.[[Realm]] to realm.\n"
+        "    // 6. Set instance.[[PrimaryInterface]] to interface.\n"
+    )
+    # No-args path (IDLGenerators.cpp:3078-3081).
+    g.append(
+        "\n"
+        "    auto impl = TRY(throw_dom_exception_if_needed(vm, [&] { return @fully_qualified_name@::construct_impl(realm); }));\n"
+    )
+    g.append(
+        "\n"
+        "    // 7. Set instance.[[Prototype]] to prototype.\n"
+        "    VERIFY(prototype.is_object());\n"
+        "    impl->set_prototype(&prototype.as_object());\n"
+        "\n"
+        '    // FIXME: Steps 8...11. of the "internally create a new object implementing the interface @name@" algorithm\n'
+        "    // (https://webidl.spec.whatwg.org/#js-platform-objects) are currently not handled, or are handled within @fully_qualified_name@::construct_impl().\n"
+        "    //  8. Let interfaces be the inclusive inherited interfaces of interface.\n"
+        "    //  9. For every interface ancestor interface in interfaces:\n"
+        "    //    9.1. Let unforgeables be the value of the [[Unforgeables]] slot of the interface object of ancestor interface in realm.\n"
+        "    //    9.2. Let keys be ! unforgeables.[[OwnPropertyKeys]]().\n"
+        "    //    9.3. For each element key of keys:\n"
+        "    //      9.3.1. Let descriptor be ! unforgeables.[[GetOwnProperty]](key).\n"
+        "    //      9.3.2. Perform ! DefinePropertyOrThrow(instance, key, descriptor).\n"
+        "    //  10. If interface is declared with the [Global] extended attribute, then:\n"
+        "    //    10.1. Define the regular operations of interface on instance, given realm.\n"
+        "    //    10.2. Define the regular attributes of interface on instance, given realm.\n"
+        "    //    10.3. Define the iteration methods of interface on instance given realm.\n"
+        "    //    10.4. Define the asynchronous iteration methods of interface on instance given realm.\n"
+        "    //    10.5. Define the global property references on instance, given realm.\n"
+        "    //    10.6. Set instance.[[SetPrototypeOf]] as defined in § 3.8.1 [[SetPrototypeOf]].\n"
+        "    //  11. Otherwise, if interfaces contains an interface which supports indexed properties, named properties, or both:\n"
+        "    //    11.1. Set instance.[[GetOwnProperty]] as defined in § 3.9.1 [[GetOwnProperty]].\n"
+        "    //    11.2. Set instance.[[Set]] as defined in § 3.9.2 [[Set]].\n"
+        "    //    11.3. Set instance.[[DefineOwnProperty]] as defined in § 3.9.3 [[DefineOwnProperty]].\n"
+        "    //    11.4. Set instance.[[Delete]] as defined in § 3.9.4 [[Delete]].\n"
+        "    //    11.5. Set instance.[[PreventExtensions]] as defined in § 3.9.5 [[PreventExtensions]].\n"
+        "    //    11.6. Set instance.[[OwnPropertyKeys]] as defined in § 3.9.6 [[OwnPropertyKeys]].\n"
+        "\n"
+        "    return *impl;\n"
+        "}\n"
+    )

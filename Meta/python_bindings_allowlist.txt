@@ -10,6 +10,7 @@ DOM/EventHandler.idl
 DOM/EventListener.idl
 DOM/Slottable.idl
 Encoding/TextEncoderCommon.idl
+Encoding/TextEncoderStream.idl
 Fetch/Body.idl
 Fetch/BodyInit.idl
 Fullscreen/DocumentExtensions.idl
@@ -39,6 +40,7 @@ HTML/Canvas/OffscreenCanvasBase.idl
 HTML/HTMLHyperlinkElementUtils.idl
 HTML/HTMLOrSVGElement.idl
 HTML/MediaError.idl
+HTML/MessageChannel.idl
 HTML/MimeType.idl
 HTML/NavigationType.idl
 HTML/NavigatorBeacon.idl
