@@ -28,8 +28,6 @@ def generate_function(
     static: bool,
     generator: SourceGenerator,
 ) -> None:
-    if function.parameters:
-        raise NotImplementedError(f"operation parameters are not yet supported ({function.name})")
     if function.return_type and function.return_type.name == "Promise":
         raise NotImplementedError("Promise-returning operations not yet supported")
     if "CEReactions" in function.extended_attributes:
@@ -69,8 +67,11 @@ def generate_function(
     # IDLGenerators.cpp:2424-2425 — argument count check.
     _generate_argument_count_check(function, generator)
 
-    # No arguments at this rung; the .arguments placeholder stays empty.
-    g.set(".arguments", "")
+    # IDLGenerators.cpp:2427-2429 — coerce each argument.
+    from .to_cpp import generate_arguments
+
+    args = generate_arguments(function.parameters, interface, g)
+    g.set(".arguments", args)
 
     # IDLGenerators.cpp:2442-2445 — call.
     g.append(

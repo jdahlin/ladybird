@@ -387,11 +387,10 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
             # via the Unimplemented placeholder; no body needed.
             continue
         _generate_attribute_getter(attribute, interface, class_name, generator)
-        # Attribute setters add another emit; this rung only handles readonly.
         if not attribute.readonly or any(
             k in attribute.extended_attributes for k in ("Replaceable", "PutForwards", "LegacyLenientSetter")
         ):
-            raise NotImplementedError("attribute setter definitions are not yet supported on this rung")
+            _generate_attribute_setter(attribute, interface, class_name, generator)
 
     # IDLGenerators.cpp:4866-4886 — per-operation bodies + overload arbiters.
     from .operations import generate_function
@@ -670,3 +669,114 @@ def _generate_prototype_or_global_mixin_initialization(
 
     # IDLGenerators.cpp:4151-4153 — close.
     g.append("\n}\n")
+
+
+def _generate_attribute_setter(attribute, interface: Interface, class_name: str, generator: SourceGenerator) -> None:
+    """Port of generate_attribute_setter (IDLGenerators.cpp:4156-4405).
+
+    Currently the simple (non-Reflect, non-CEReactions) path: PutForwards
+    and Replaceable are early-return shortcuts; LegacyLenientSetter
+    returns undefined; everything else coerces value with generate_to_cpp
+    and calls impl->set_<cpp_name>().
+    """
+    from .to_cpp import generate_to_cpp
+    from .types import attribute_callback_basename
+    from .types import attribute_cpp_name
+
+    if "Reflect" in attribute.extended_attributes:
+        raise NotImplementedError(f"[Reflect] setter not yet supported ({attribute.name})")
+    if "CEReactions" in attribute.extended_attributes:
+        raise NotImplementedError(f"[CEReactions] setter not yet supported ({attribute.name})")
+
+    g = generator.fork()
+    cb = attribute_callback_basename(attribute)
+    g.set("class_name", class_name)
+    g.set("attribute.name", attribute.name)
+    g.set("attribute.setter_callback", f"{cb}_setter")
+    g.set("attribute.cpp_name", attribute_cpp_name(attribute))
+
+    g.append(
+        "\n"
+        "JS_DEFINE_NATIVE_FUNCTION(@class_name@::@attribute.setter_callback@)\n"
+        "{\n"
+        '    WebIDL::log_trace(vm, "@class_name@::@attribute.setter_callback@");\n'
+        "    [[maybe_unused]] auto& realm = *vm.current_realm();\n"
+        "\n"
+        "    // 1. Let V be undefined.\n"
+        "    auto value = JS::js_undefined();\n"
+        "\n"
+        "    // 2. If any arguments were passed, then set V to the value of the first argument passed.\n"
+        "    if (vm.argument_count() > 0)\n"
+        "        value = vm.argument(0);\n"
+        "\n"
+        "    // 3. Let id be attribute’s identifier.\n"
+        "    // 4. Let idlObject be null.\n"
+        "    // 5. If attribute is a regular attribute:\n"
+        "\n"
+        "    // 1. Let jsValue be the this value, if it is not null or undefined, or realm’s global object otherwise.\n"
+        "    //   (This will subsequently cause a TypeError in a few steps, if the global object does not implement target and [LegacyLenientThis] is not specified.)\n"
+        '    // FIXME: 2. If jsValue is a platform object, then perform a security check, passing jsValue, id, and "setter".\n'
+        "    // 3. Let validThis be true if jsValue implements target, or false otherwise.\n"
+        "    auto maybe_impl = impl_from(vm);\n"
+        "\n"
+        "    // 4. If validThis is false and attribute was not specified with the [LegacyLenientThis] extended attribute, then throw a TypeError.\n"
+    )
+    if "LegacyLenientThis" not in attribute.extended_attributes:
+        g.append("\n    auto impl = TRY(maybe_impl);\n")
+
+    if "Replaceable" in attribute.extended_attributes:
+        g.append(
+            "\n"
+            "    // 1. Perform ? CreateDataPropertyOrThrow(jsValue, id, V).\n"
+            '    TRY(impl->create_data_property_or_throw("@attribute.name@"_utf16_fly_string, value));\n'
+            "\n"
+            "    // 2. Return undefined.\n"
+            "    return JS::js_undefined();\n"
+            "}\n"
+        )
+        return
+
+    if "LegacyLenientThis" in attribute.extended_attributes:
+        g.append(
+            "\n"
+            "    if (maybe_impl.is_error())\n"
+            "        return JS::js_undefined();\n"
+            "\n"
+            "    auto impl = maybe_impl.release_value();\n"
+        )
+
+    if "LegacyLenientSetter" in attribute.extended_attributes:
+        g.append("\n    (void)impl;\n    return JS::js_undefined();\n}\n")
+        return
+
+    if "PutForwards" in attribute.extended_attributes:
+        g.set("put_forwards_identifier", attribute.extended_attributes["PutForwards"])
+        g.append(
+            "\n"
+            "    // 1. Let Q be ? Get(jsValue, id).\n"
+            '    auto receiver_value = TRY(impl->get("@attribute.name@"_utf16_fly_string));\n'
+            "\n"
+            "    // 2. If Q is not an Object, then throw a TypeError.\n"
+            "    if (!receiver_value.is_object())\n"
+            "        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, receiver_value);\n"
+            "    auto& receiver = receiver_value.as_object();\n"
+            "\n"
+            "    // 3. Let forwardId be the identifier argument of the [PutForwards] extended attribute.\n"
+            '    auto forward_id = "@put_forwards_identifier@"_utf16_fly_string;\n'
+            "\n"
+            "    // 4. Perform ? Set(Q, forwardId, V, false).\n"
+            "    TRY(receiver.set(JS::PropertyKey { forward_id, JS::PropertyKey::StringMayBeNumber::No }, value, JS::Object::ShouldThrowExceptions::No));\n"
+            "\n"
+            "    // 5. Return undefined.\n"
+            "    return JS::js_undefined();\n"
+            "}\n"
+        )
+        return
+
+    # Coerce value into cpp_value, then call impl->set_<cpp_name>(cpp_value).
+    generate_to_cpp(attribute, "value", "", "cpp_value", interface, g)
+    g.append(
+        "\n    TRY(throw_dom_exception_if_needed(vm, [&] { return impl->set_@attribute.cpp_name@(cpp_value); }));\n"
+    )
+
+    g.append("    return JS::js_undefined();\n}\n")

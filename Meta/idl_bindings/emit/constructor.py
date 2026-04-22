@@ -232,8 +232,6 @@ def _generate_constructor(
     constructor, interface: Interface, generator: SourceGenerator, is_html_constructor: bool
 ) -> None:
     """Port of generate_constructor (IDLGenerators.cpp:3026-3116)."""
-    if constructor.parameters and not is_html_constructor:
-        raise NotImplementedError("constructor parameters are not yet supported")
 
     g = generator.fork()
     g.set("constructor_class", interface.constructor_class)
@@ -275,11 +273,30 @@ def _generate_constructor(
         "    // 5. Set instance.[[Realm]] to realm.\n"
         "    // 6. Set instance.[[PrimaryInterface]] to interface.\n"
     )
-    # No-args path (IDLGenerators.cpp:3078-3081).
-    g.append(
-        "\n"
-        "    auto impl = TRY(throw_dom_exception_if_needed(vm, [&] { return @fully_qualified_name@::construct_impl(realm); }));\n"
-    )
+    if constructor.parameters:
+        from .operations import _generate_argument_count_check
+        from .to_cpp import generate_arguments
+
+        # Synthesize a tiny "function-like" so the count-check helper can be reused.
+        class _Pseudo:
+            def __init__(self, params, name):
+                self.parameters = params
+                self.name = name
+                self.extended_attributes = {}
+
+        _generate_argument_count_check(_Pseudo(constructor.parameters, interface.name), generator)
+        args = generate_arguments(constructor.parameters, interface, g)
+        g.set(".constructor_arguments", args)
+        g.append(
+            "\n"
+            "    auto impl = TRY(throw_dom_exception_if_needed(vm, [&] { return @fully_qualified_name@::construct_impl(realm, @.constructor_arguments@); }));\n"
+        )
+    else:
+        # No-args path (IDLGenerators.cpp:3078-3081).
+        g.append(
+            "\n"
+            "    auto impl = TRY(throw_dom_exception_if_needed(vm, [&] { return @fully_qualified_name@::construct_impl(realm); }));\n"
+        )
     g.append(
         "\n"
         "    // 7. Set instance.[[Prototype]] to prototype.\n"

@@ -1,10 +1,15 @@
 # Files whose Python-generated bindings are byte-identical to the C++ tool's output.
+Animations/DocumentTimeline.idl
 ARIA/ARIAMixin.idl
 Crypto/CryptoKey.idl
+CSS/AnimationEvent.idl
 CSS/CSSAnimation.idl
 CSS/CSSImageValue.idl
 CSS/CSSMathValue.idl
 CSS/CSSTransition.idl
+CSS/MediaQueryListEvent.idl
+CSS/TransitionEvent.idl
+DOM/AbortController.idl
 DOM/ChildNode.idl
 DOM/EventHandler.idl
 DOM/EventListener.idl
@@ -37,8 +42,13 @@ HTML/Canvas/CanvasState.idl
 HTML/Canvas/CanvasText.idl
 HTML/Canvas/CanvasTransform.idl
 HTML/Canvas/CanvasUserInterface.idl
+HTML/CanvasGradient.idl
 HTML/Canvas/OffscreenCanvasBase.idl
+HTML/CanvasPattern.idl
+HTML/CloseEvent.idl
+HTML/ErrorEvent.idl
 HTML/External.idl
+HTML/HashChangeEvent.idl
 HTML/HTMLHyperlinkElementUtils.idl
 HTML/HTMLOrSVGElement.idl
 HTML/MediaError.idl
@@ -52,8 +62,10 @@ HTML/NavigatorDeviceMemory.idl
 HTML/NavigatorID.idl
 HTML/NavigatorLanguage.idl
 HTML/NavigatorOnLine.idl
+HTML/PageTransitionEvent.idl
 HTML/PopoverTargetAttributes.idl
 HTML/TextMetrics.idl
+HTML/TimeRanges.idl
 HTML/UniversalGlobalScope.idl
 HTML/UserActivation.idl
 HTML/ValidityState.idl
@@ -63,6 +75,7 @@ HTML/WindowSessionStorage.idl
 HTML/WorkletGlobalScope.idl
 IndexedDB/IDBCursorWithValue.idl
 IndexedDB/IDBRecord.idl
+Internals/InternalAnimationTimeline.idl
 MediaCapture/MediaStreamConstraints.idl
 MediaSourceExtensions/MediaSourceHandle.idl
 NavigationTiming/PerformanceExtensions.idl
@@ -70,12 +83,14 @@ RequestIdleCallback/IdleDeadline.idl
 RequestIdleCallback/IdleRequest.idl
 ResizeObserver/ResizeObserverSize.idl
 Speech/SpeechRecognitionAlternative.idl
+Speech/SpeechRecognitionPhrase.idl
 Speech/SpeechSynthesisVoice.idl
 StorageAPI/NavigatorStorage.idl
 Streams/GenericTransformStream.idl
 Streams/QueuingStrategy.idl
 Streams/QueuingStrategyInit.idl
 Streams/ReadableStreamGenericReader.idl
+Streams/WritableStreamDefaultController.idl
 SVG/SVGAnimatedLength.idl
 SVG/SVGAnimatedLengthList.idl
 SVG/SVGAnimatedNumberList.idl
@@ -91,8 +106,10 @@ SVG/SVGFitToViewBox.idl
 SVG/SVGUnitTypes.idl
 SVG/SVGURIReference.idl
 UIEvents/PointerEventHandlers.idl
+UserTiming/PerformanceMark.idl
 UserTiming/PerformanceMeasure.idl
 WebAudio/AudioDestinationNode.idl
+WebAudio/AudioListener.idl
 WebGL/Extensions/EXTBlendMinMax.idl
 WebGL/Extensions/EXTColorBufferFloat.idl
 WebGL/Extensions/EXTRenderSnorm.idl
@@ -107,6 +124,7 @@ WebGL/Types.idl
 WebGL/WebGL2RenderingContextOverloads.idl
 WebGL/WebGLActiveInfo.idl
 WebGL/WebGLBuffer.idl
+WebGL/WebGLContextEvent.idl
 WebGL/WebGLFramebuffer.idl
 WebGL/WebGLProgram.idl
 WebGL/WebGLQuery.idl
@@ -120,8 +138,10 @@ WebGL/WebGLTexture.idl
 WebGL/WebGLTransformFeedback.idl
 WebGL/WebGLUniformLocation.idl
 WebGL/WebGLVertexArrayObject.idl
+WebIDL/DOMException.idl
 WebIDL/Function.idl
 WebXR/XRLayer.idl
 WebXR/XRRenderState.idl
+XHR/ProgressEvent.idl
 XHR/XMLHttpRequestUpload.idl
 XPath/XPathNSResolver.idl
