@@ -66,10 +66,181 @@ def generate_prototype_header(interface: Interface, generator: SourceGenerator) 
         return
 
     # Non-global path: generate_prototype_or_global_mixin_declarations
-    # IDLGenerators.cpp:3246-3364. For an empty interface it just emits the
-    # class closer. Attribute / overload / iterator / setlike output is
-    # added at later rungs.
+    # IDLGenerators.cpp:3246-3364.
+    _generate_prototype_or_global_mixin_declarations(interface, g)
+
+
+# Port of IDLGenerators.cpp:3246-3364. Emits the per-member
+# JS_DECLARE_NATIVE_FUNCTION lines that go inside the prototype/global-mixin
+# class body.
+def _generate_prototype_or_global_mixin_declarations(interface: Interface, generator: SourceGenerator) -> None:
+    g = generator.fork()
+
+    # Operations (one declaration per overload set, plus one per overload
+    # if the set is bigger than one). Operation names are emitted in
+    # snake_case via _make_input_acceptable_cpp.
+    overload_sets: dict[str, list] = {}
+    for op in interface.operations:
+        if "FIXME" in op.extended_attributes:
+            continue
+        overload_sets.setdefault(op.name, []).append(op)
+
+    for name, overloads in overload_sets.items():
+        fg = g.fork()
+        fg.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
+        # IDLGenerators.cpp:3253-3255 — note the trailing 8-space indent inside
+        # the raw string, which lands on the next line as visible whitespace.
+        fg.append("\n    JS_DECLARE_NATIVE_FUNCTION(@function.name:snakecase@);\n        ")
+        if len(overloads) > 1:
+            for i in range(len(overloads)):
+                fg.set("overload_suffix", str(i))
+                fg.append("\n    JS_DECLARE_NATIVE_FUNCTION(@function.name:snakecase@@overload_suffix@);\n")
+
+    if interface.has_stringifier:
+        sg = g.fork()
+        sg.append("\n    JS_DECLARE_NATIVE_FUNCTION(to_string);\n        ")
+
+    if interface.pair_iterator_types is not None:
+        ig = g.fork()
+        ig.append(
+            "\n    JS_DECLARE_NATIVE_FUNCTION(entries);\n"
+            "    JS_DECLARE_NATIVE_FUNCTION(for_each);\n"
+            "    JS_DECLARE_NATIVE_FUNCTION(keys);\n"
+            "    JS_DECLARE_NATIVE_FUNCTION(values);\n        "
+        )
+
+    if interface.async_value_iterator_type is not None:
+        ig = g.fork()
+        ig.append("\n    JS_DECLARE_NATIVE_FUNCTION(values);\n        ")
+
+    # setlike / maplike / named-property-handler declarations are added at
+    # their respective concept-ladder rungs.
+    if interface.set_entry_type is not None:
+        raise NotImplementedError("setlike declarations are not yet supported")
+    if interface.map_key_type is not None:
+        raise NotImplementedError("maplike declarations are not yet supported")
+    if interface.named_property_getter is not None:
+        raise NotImplementedError("named property getter declarations are not yet supported")
+    if interface.indexed_property_getter is not None:
+        raise NotImplementedError("indexed property getter declarations are not yet supported")
+
+    # Per-attribute getter/setter declarations. IDLGenerators.cpp:3340-3355.
+    for attribute in interface.attributes:
+        if "FIXME" in attribute.extended_attributes:
+            continue
+        ag = g.fork()
+        # The C++ side computes getter/setter callback names via
+        # `attribute_callback_name` (with `[AttributeCallbackName]` override
+        # or snake_case). We replicate that name computation locally.
+        cb_base = attribute.extended_attributes.get("AttributeCallbackName") or _to_snakecase(attribute.name).replace(
+            "-", "_"
+        )
+        ag.set("attribute.getter_callback", f"{cb_base}_getter")
+        ag.append("\n    JS_DECLARE_NATIVE_FUNCTION(@attribute.getter_callback@);\n")
+
+        if (
+            not attribute.readonly
+            or "Replaceable" in attribute.extended_attributes
+            or "PutForwards" in attribute.extended_attributes
+            or "LegacyLenientSetter" in attribute.extended_attributes
+        ):
+            ag.set("attribute.setter_callback", f"{cb_base}_setter")
+            ag.append("\n    JS_DECLARE_NATIVE_FUNCTION(@attribute.setter_callback@);\n")
+
+    # IDLGenerators.cpp:3357-3361 — class closer + trailing blank line.
     g.append("\n\n};\n\n")
+    # IDLGenerators.cpp:3363 — generate_enumerations follows.
+    _generate_enumerations(interface, g)
+
+
+# Port of IDLGenerators.cpp:3162-3171 (get_best_value_for_underlying_enum_type).
+def _best_underlying_enum_type(size: int) -> str:
+    if size < 0xFF:
+        return "u8"
+    if size < 0xFFFF:
+        return "u16"
+    raise AssertionError(f"enum too large: {size}")
+
+
+# Port of IDLGenerators.cpp:3201-3244 (generate_enumerations). Called from
+# both generate_prototype_or_global_mixin_declarations and a couple of other
+# spots (they emit the same enum-type definitions in different files). Skips
+# enums that aren't original definitions (those came in from #imports).
+def _generate_enumerations(interface: Interface, generator: SourceGenerator) -> None:
+    g = generator.fork()
+    for type_name, enumeration in interface.enumerations.items():
+        if not enumeration.is_original_definition:
+            continue
+        eg = g.fork()
+        eg.set("enum.type.name", type_name)
+        eg.set("enum.underlying_type", _best_underlying_enum_type(len(enumeration.translated_cpp_names)))
+        eg.append("\nenum class @enum.type.name@ : @enum.underlying_type@ {\n")
+        for cpp_name in enumeration.translated_cpp_names.values():
+            eg.set("enum.entry", cpp_name)
+            eg.append("\n    @enum.entry@,\n")
+        eg.append("\n};\n")
+        eg.append("\ninline String idl_enum_to_string(@enum.type.name@ value)\n{\n    switch (value) {\n")
+        for value, cpp_name in enumeration.translated_cpp_names.items():
+            eg.set("enum.entry", cpp_name)
+            eg.set("enum.string", value)
+            eg.append('\n    case @enum.type.name@::@enum.entry@:\n        return "@enum.string@"_string;\n')
+        eg.append("\n    }\n    VERIFY_NOT_REACHED();\n}\n")
+
+
+# IDLGenerators.cpp:make_input_acceptable_cpp helper (file-scope). Maps
+# C++ keywords to a `_`-suffixed form and replaces `-` with `_`.
+_CPP_KEYWORD_RESERVED = frozenset(
+    {
+        "break",
+        "char",
+        "class",
+        "continue",
+        "default",
+        "delete",
+        "for",
+        "initialize",
+        "inline",
+        "mutable",
+        "namespace",
+        "operator",
+        "register",
+        "switch",
+        "template",
+    }
+)
+
+
+def _make_input_acceptable_cpp(s: str) -> str:
+    if s in _CPP_KEYWORD_RESERVED:
+        return s + "_"
+    return s.replace("-", "_")
+
+
+def _to_snakecase(s: str) -> str:
+    """Mirror AK::String::to_snakecase.
+
+    Inserts `_` before each uppercase letter (except at the start), then
+    lowercases. Adjacent uppercases stay together until the *last* one in
+    a run, so "URLSearchParams" → "url_search_params" and "HTMLElement"
+    → "html_element".
+    """
+    if not s:
+        return s
+    out: list[str] = []
+    for i, ch in enumerate(s):
+        if ch.isupper():
+            # Insert underscore if previous char is lowercase, or if the
+            # next char is lowercase (mid-run boundary like "URLSearch" →
+            # "url_search").
+            if i > 0:
+                prev = s[i - 1]
+                nxt = s[i + 1] if i + 1 < len(s) else ""
+                if prev.islower() or (nxt.islower() and prev.isupper()):
+                    out.append("_")
+            out.append(ch.lower())
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def generate_prototype_implementation(interface: Interface, generator: SourceGenerator) -> None:

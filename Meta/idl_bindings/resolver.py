@@ -498,7 +498,15 @@ def compute_post_parse_names(interface: Interface) -> None:
     Mirrors the tail of IDLParser.cpp:parse_interface (lines 833-856) and
     main.cpp:60-69 (for `fully_qualified_name`). Splitting this out keeps
     the parser pure and lets the resolver run it after include flattening.
+
+    For files with no primary interface (typedef-only files, mixin-only
+    files) the C++ tool leaves these fields at their default empty string —
+    parse_interface is never called. We mirror that early-return so codegen
+    sees the same empty values and emits the same (empty-class-name) output.
     """
+    if not interface.has_primary_interface:
+        return
+
     # `[ImplementedAs=...]` overrides the C++ symbol name.
     interface.implemented_name = interface.extended_attributes.get("ImplementedAs", interface.name)
 
