@@ -337,9 +337,6 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
         raise NotImplementedError("setlike definitions are not yet supported")
     if interface.map_key_type is not None:
         raise NotImplementedError("maplike definitions are not yet supported")
-    if interface.operations:
-        raise NotImplementedError("operation definitions are not yet supported")
-
     is_global_interface = "Global" in interface.extended_attributes
     class_name = interface.global_mixin_class if is_global_interface else interface.prototype_class
 
@@ -395,6 +392,25 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
             k in attribute.extended_attributes for k in ("Replaceable", "PutForwards", "LegacyLenientSetter")
         ):
             raise NotImplementedError("attribute setter definitions are not yet supported on this rung")
+
+    # IDLGenerators.cpp:4866-4886 — per-operation bodies + overload arbiters.
+    from .operations import generate_function
+
+    overload_groups: dict[str, list] = {}
+    for op in interface.operations:
+        if "FIXME" in op.extended_attributes:
+            continue
+        overload_groups.setdefault(op.name, []).append(op)
+    for name, group in overload_groups.items():
+        if len(group) > 1:
+            raise NotImplementedError(f"operation overload arbiter for {name!r} not yet supported")
+
+    for op in interface.operations:
+        if "FIXME" in op.extended_attributes:
+            continue
+        if "Default" in op.extended_attributes:
+            raise NotImplementedError("[Default] operations not yet supported")
+        generate_function(op, interface, class_name, static=False, generator=generator)
 
 
 def _generate_attribute_getter(attribute, interface: Interface, class_name: str, generator: SourceGenerator) -> None:
@@ -567,6 +583,57 @@ def _generate_prototype_or_global_mixin_initialization(
     # Skipped at this rung: unscopable_object, overload_sets, attributes,
     # pair iterator, async iterator, setlike, maplike, named_property_*,
     # indexed_property_*. They all add lines here at later rungs.
+
+    # IDLGenerators.cpp:3943-3955 — function loop with the unforgeable filter
+    # AND the FIXME placeholder branch.
+    for op in interface.operations:
+        has_unforgeable = "LegacyUnforgeable" in op.extended_attributes
+        if generate_unforgeables and not has_unforgeable:
+            continue
+        if not generate_unforgeables and has_unforgeable:
+            continue
+        if "FIXME" not in op.extended_attributes:
+            continue
+        if "Exposed" in op.extended_attributes:
+            raise NotImplementedError("[Exposed] [FIXME] operations not yet supported")
+        fg = g.fork()
+        fg.set("function.name", op.name)
+        fg.append(
+            "\n"
+            '        @define_direct_property@("@function.name@"_utf16_fly_string, JS::js_undefined(), default_attributes | JS::Attribute::Unimplemented);\n'
+            "            "
+        )
+
+    # IDLGenerators.cpp:3973-4006 — per-operation define_native_function.
+    overload_groups: dict[str, list] = {}
+    for op in interface.operations:
+        if "FIXME" in op.extended_attributes:
+            continue
+        overload_groups.setdefault(op.name, []).append(op)
+    for name, group in overload_groups.items():
+        first = group[0]
+        has_unforgeable = "LegacyUnforgeable" in first.extended_attributes
+        if generate_unforgeables and not has_unforgeable:
+            continue
+        if not generate_unforgeables and has_unforgeable:
+            continue
+        if "SecureContext" in first.extended_attributes:
+            raise NotImplementedError("[SecureContext] operations not yet supported")
+        if "Unscopable" in first.extended_attributes:
+            raise NotImplementedError("[Unscopable] operations not yet supported")
+        from .prototype import _make_input_acceptable_cpp
+        from .prototype import _to_snakecase
+
+        og = g.fork()
+        og.set("function.name", name)
+        og.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
+        # shortest_length across the overload set (per get_shortest_function_length).
+        shortest = min(sum(1 for p in op2.parameters if not p.optional and not p.variadic) for op2 in group)
+        og.set("function.length", str(shortest))
+        og.append(
+            "\n"
+            '    @define_native_function@(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, default_attributes);\n'
+        )
 
     # IDLGenerators.cpp:3957-3971 — constants on the prototype (only when
     # not generating unforgeables). The C++ side emits constants AFTER

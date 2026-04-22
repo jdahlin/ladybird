@@ -1,0 +1,109 @@
+"""Operation body emitter — port of generate_function
+(IDLGenerators.cpp:2386-2501) and generate_arguments
+(IDLGenerators.cpp:1922-...).
+
+Operations are the regular methods declared on an interface body. They
+become JS_DEFINE_NATIVE_FUNCTION callbacks that unwrap the JS receiver,
+coerce each parameter from JS values to C++, call into the impl, and
+wrap the return value back to JS.
+
+Currently supports the simple no-arg, no-Promise, no-CEReactions case
+covering operations like `undefined addSearchProvider();` (HTML/External.idl).
+Parameter coercion, Promise return wrapping, and CEReactions handling
+arrive on later concept-ladder rungs.
+"""
+
+from __future__ import annotations
+
+from ..ast import Interface
+from ..ast import Operation
+from .source_generator import SourceGenerator
+
+
+def generate_function(
+    function: Operation,
+    interface: Interface,
+    class_name: str,
+    *,
+    static: bool,
+    generator: SourceGenerator,
+) -> None:
+    if function.parameters:
+        raise NotImplementedError(f"operation parameters are not yet supported ({function.name})")
+    if function.return_type and function.return_type.name == "Promise":
+        raise NotImplementedError("Promise-returning operations not yet supported")
+    if "CEReactions" in function.extended_attributes:
+        raise NotImplementedError("[CEReactions] operations not yet supported")
+    if static:
+        raise NotImplementedError("static operations not yet supported")
+
+    from .prototype import _make_input_acceptable_cpp
+    from .prototype import _to_snakecase
+
+    g = generator.fork()
+    g.set("class_name", class_name)
+    g.set("interface_fully_qualified_name", interface.fully_qualified_name)
+    g.set("function.name", function.name)
+    snake = _make_input_acceptable_cpp(_to_snakecase(function.name))
+    g.set("function.name:snakecase", snake)
+    g.set(
+        "overload_suffix",
+        str(getattr(function, "overload_index", 0)) if getattr(function, "is_overloaded", False) else "",
+    )
+
+    cpp_name = function.extended_attributes.get("ImplementedAs") or snake
+    g.set("function.cpp_name", cpp_name)
+
+    # IDLGenerators.cpp:2402-2407 — opener.
+    g.append(
+        "\n"
+        "JS_DEFINE_NATIVE_FUNCTION(@class_name@::@function.name:snakecase@@overload_suffix@)\n"
+        "{\n"
+        '    WebIDL::log_trace(vm, "@class_name@::@function.name:snakecase@@overload_suffix@");\n'
+        "    [[maybe_unused]] auto& realm = *vm.current_realm();\n"
+    )
+
+    # impl_from for non-static (IDLGenerators.cpp:2417-2421).
+    g.append("\n    auto* impl = TRY(impl_from(vm));\n")
+
+    # IDLGenerators.cpp:2424-2425 — argument count check.
+    _generate_argument_count_check(function, generator)
+
+    # No arguments at this rung; the .arguments placeholder stays empty.
+    g.set(".arguments", "")
+
+    # IDLGenerators.cpp:2442-2445 — call.
+    g.append(
+        "\n"
+        "    [[maybe_unused]] auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@function.cpp_name@(@.arguments@); }));\n"
+    )
+
+    # IDLGenerators.cpp:2496 — return statement.
+    from .types import generate_wrap_statement
+
+    if function.return_type is None:
+        raise AssertionError("operation without return type")
+    generate_wrap_statement(g, "retval", function.return_type, interface, "return")
+
+    g.append("\n}\n")
+
+
+def _generate_argument_count_check(function: Operation, generator: SourceGenerator) -> None:
+    """Port of generate_argument_count_check (IDLGenerators.cpp:1899-1920)."""
+    required = sum(1 for p in function.parameters if not p.optional and not p.variadic)
+    if required == 0:
+        return
+    g = generator.fork()
+    g.set("function.name", function.name)
+    g.set("function.nargs", str(required))
+    if required == 1:
+        g.set(".bad_arg_count", "JS::ErrorType::BadArgCountOne")
+        g.set(".arg_count_suffix", "")
+    else:
+        g.set(".bad_arg_count", "JS::ErrorType::BadArgCountMany")
+        g.set(".arg_count_suffix", f', "{required}"')
+    g.append(
+        "\n"
+        "    if (vm.argument_count() < @function.nargs@)\n"
+        '        return vm.throw_completion<JS::TypeError>(@.bad_arg_count@, "@function.name@"@.arg_count_suffix@);\n'
+    )

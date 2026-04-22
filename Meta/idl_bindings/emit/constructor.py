@@ -46,9 +46,40 @@ def generate_constructor_header(interface: Interface, generator: SourceGenerator
             "    virtual bool has_constructor() const override { return true; }\n"
         )
 
-    # Static attribute / constructor-overload / static-overload declarations
-    # are emitted here too. Skipped for the empty-interface rung — added when
-    # the concept-ladder reaches static members.
+    # Static attribute declarations (IDLGenerators.cpp:5599-5611).
+    from .prototype import _make_input_acceptable_cpp
+    from .prototype import _to_snakecase
+
+    for sa in interface.static_attributes:
+        ag = g.fork()
+        ag.set("attribute.name:snakecase", _to_snakecase(sa.name))
+        ag.append("\n    JS_DECLARE_NATIVE_FUNCTION(@attribute.name:snakecase@_getter);\n")
+        if not sa.readonly:
+            ag.append("\n    JS_DECLARE_NATIVE_FUNCTION(@attribute.name:snakecase@_setter);\n")
+
+    # Constructor-overload declarations (IDLGenerators.cpp:5613-5623).
+    if len(interface.constructors) > 1:
+        cg = g.fork()
+        for i in range(len(interface.constructors)):
+            cg.set("overload_suffix", str(i))
+            cg.append(
+                "\n    JS::ThrowCompletionOr<GC::Ref<JS::Object>> construct@overload_suffix@(JS::FunctionObject& new_target);\n"
+            )
+
+    # Static-operation declarations (IDLGenerators.cpp:5625-5639).
+    static_groups: dict[str, list] = {}
+    for op in interface.static_operations:
+        if "FIXME" in op.extended_attributes:
+            continue
+        static_groups.setdefault(op.name, []).append(op)
+    for name, group in static_groups.items():
+        og = g.fork()
+        og.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
+        og.append("\n    JS_DECLARE_NATIVE_FUNCTION(@function.name:snakecase@);\n")
+        if len(group) > 1:
+            for i in range(len(group)):
+                og.set("overload_suffix", str(i))
+                og.append("\n    JS_DECLARE_NATIVE_FUNCTION(@function.name:snakecase@@overload_suffix@);\n")
 
     g.append("\n};\n")
 

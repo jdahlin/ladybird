@@ -11,6 +11,7 @@ DOM/EventListener.idl
 DOM/Slottable.idl
 Encoding/TextEncoderCommon.idl
 Encoding/TextEncoderStream.idl
+EntriesAPI/FileSystemEntry.idl
 Fetch/Body.idl
 Fetch/BodyInit.idl
 Fullscreen/DocumentExtensions.idl
@@ -37,11 +38,13 @@ HTML/Canvas/CanvasText.idl
 HTML/Canvas/CanvasTransform.idl
 HTML/Canvas/CanvasUserInterface.idl
 HTML/Canvas/OffscreenCanvasBase.idl
+HTML/External.idl
 HTML/HTMLHyperlinkElementUtils.idl
 HTML/HTMLOrSVGElement.idl
 HTML/MediaError.idl
 HTML/MessageChannel.idl
 HTML/MimeType.idl
+HTML/NavigationDestination.idl
 HTML/NavigationType.idl
 HTML/NavigatorBeacon.idl
 HTML/NavigatorConcurrentHardware.idl
@@ -63,6 +66,7 @@ IndexedDB/IDBRecord.idl
 MediaCapture/MediaStreamConstraints.idl
 MediaSourceExtensions/MediaSourceHandle.idl
 NavigationTiming/PerformanceExtensions.idl
+RequestIdleCallback/IdleDeadline.idl
 RequestIdleCallback/IdleRequest.idl
 ResizeObserver/ResizeObserverSize.idl
 Speech/SpeechRecognitionAlternative.idl
