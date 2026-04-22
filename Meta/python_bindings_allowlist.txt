@@ -5,6 +5,7 @@ Clipboard/ClipboardEvent.idl
 Compression/CompressionStream.idl
 Compression/DecompressionStream.idl
 ContentSecurityPolicy/SecurityPolicyViolationEvent.idl
+CredentialManagement/FederatedCredential.idl
 Crypto/CryptoKey.idl
 CSS/AnimationEvent.idl
 CSS/CSSAnimation.idl
@@ -23,6 +24,7 @@ CSS/CSSTranslate.idl
 CSS/CSSUnitValue.idl
 CSS/CSSVariableReferenceValue.idl
 CSS/MediaQueryListEvent.idl
+CSS/MediaQueryList.idl
 CSS/TransitionEvent.idl
 CSS/VisualViewport.idl
 DOM/AbortController.idl
@@ -36,9 +38,11 @@ Encoding/TextEncoderStream.idl
 EntriesAPI/FileSystemEntry.idl
 Fetch/Body.idl
 Fetch/BodyInit.idl
+FileAPI/FileReaderSync.idl
 Fullscreen/DocumentExtensions.idl
 Fullscreen/ElementExtensions.idl
 Gamepad/GamepadButton.idl
+Gamepad/GamepadEvent.idl
 Geolocation/GeolocationPositionError.idl
 GPC/GlobalPrivacyControl.idl
 HighResolutionTime/DOMHighResTimeStamp.idl
@@ -72,6 +76,7 @@ HTML/ErrorEvent.idl
 HTML/External.idl
 HTML/FormDataEvent.idl
 HTML/HashChangeEvent.idl
+HTML/History.idl
 HTML/HTMLHyperlinkElementUtils.idl
 HTML/HTMLOrSVGElement.idl
 HTML/MediaError.idl
@@ -89,6 +94,7 @@ HTML/NavigatorOnLine.idl
 HTML/PageTransitionEvent.idl
 HTML/PopoverTargetAttributes.idl
 HTML/PopStateEvent.idl
+HTML/StorageEvent.idl
 HTML/TextMetrics.idl
 HTML/TextTrackCue.idl
 HTML/TextTrack.idl
@@ -120,6 +126,7 @@ RequestIdleCallback/IdleDeadline.idl
 RequestIdleCallback/IdleRequest.idl
 ResizeObserver/ResizeObserverSize.idl
 ServiceWorker/ServiceWorker.idl
+ServiceWorker/ServiceWorkerRegistration.idl
 Speech/SpeechGrammar.idl
 Speech/SpeechRecognitionAlternative.idl
 Speech/SpeechRecognitionEvent.idl
@@ -162,6 +169,7 @@ UIEvents/PointerEventHandlers.idl
 UserTiming/PerformanceMark.idl
 UserTiming/PerformanceMeasure.idl
 WebAssembly/Global.idl
+WebAssembly/Memory.idl
 WebAssembly/Table.idl
 WebAudio/AudioBufferSourceNode.idl
 WebAudio/AudioDestinationNode.idl

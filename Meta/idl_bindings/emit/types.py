@@ -218,12 +218,35 @@ def _close_wrap_if(g, type_, is_optional, wrap_in_if) -> None:
         g.append("\n    }\n")
 
 
-def _cpp_type_name(type_: Type) -> str:
-    """Subset of cpp_type_name (IDLGenerators.cpp:225-234).
+_JS_BUILTIN_BUFFER_TYPES = frozenset(
+    {
+        "ArrayBuffer",
+        "SharedArrayBuffer",
+        "DataView",
+        "Int8Array",
+        "Uint8Array",
+        "Uint8ClampedArray",
+        "Int16Array",
+        "Uint16Array",
+        "Int32Array",
+        "Uint32Array",
+        "BigInt64Array",
+        "BigUint64Array",
+        "Float16Array",
+        "Float32Array",
+        "Float64Array",
+    }
+)
 
-    Currently handles only the plain-name case. Libweb-namespace and
-    JS-builtin-buffer special cases come at later rungs.
-    """
+
+def _cpp_type_name(type_: Type) -> str:
+    """Subset of cpp_type_name (IDLGenerators.cpp:225-234)."""
+    from ..resolver import _libweb_interface_namespaces
+
+    if type_.name in _libweb_interface_namespaces():
+        return f"{type_.name}::{type_.name}"
+    if type_.name in _JS_BUILTIN_BUFFER_TYPES:
+        return f"JS::{type_.name}"
     return type_.name
 
 

@@ -109,6 +109,10 @@ def generate_to_cpp(
     if type_.kind == "plain" and type_.name in interface.callback_functions:
         _generate_to_callback_function(g, type_, interface, optional=optional)
         return
+    callback_iface = _find_callback_interface(interface, type_.name)
+    if callback_iface is not None:
+        _generate_to_callback_interface(g, type_, callback_iface)
+        return
     if type_.kind == "plain" and not type_.name.startswith("("):
         # Bare interface name → platform object.
         _generate_to_platform_object(g, type_, optional=optional)
@@ -290,8 +294,8 @@ def _generate_to_string(parameter, type_, g, *, variadic, optional, optional_def
 
     if not may_be_null:
         g.append(" else {\n        @cpp_name@ = @parameter.optional_default_value@@string_suffix@;\n    }\n")
-    else:
-        g.append("\n")
+    # Intentionally no trailing newline for the may_be_null case — mirrors
+    # the C++ raw-string `})~~~"` at IDLGenerators.cpp:572 which also has none.
 
 
 def _generate_to_integral(parameter, type_, g, *, optional, optional_default_value):
@@ -536,3 +540,50 @@ def _to_snake(s):
     from .prototype import _to_snakecase
 
     return _to_snakecase(s)
+
+
+def _find_callback_interface(interface: Interface, type_name: str):
+    """Walk imported_interfaces looking for a callback interface with this name.
+
+    Mirrors the semantics of IDL::Interface::referenced_interface +
+    callback_interface_for_type from IDLGenerators.cpp.
+    """
+    seen: set[str] = set()
+    queue = [interface]
+    while queue:
+        i = queue.pop(0)
+        if i.filename in seen:
+            continue
+        seen.add(i.filename)
+        if i.is_callback_interface and i.name == type_name:
+            return i
+        for imp in i.imported_interfaces:
+            if imp.filename not in seen:
+                queue.append(imp)
+    return None
+
+
+def _generate_to_callback_interface(g, type_, callback_interface) -> None:
+    """Port of generate_callback_interface_to_cpp (IDLGenerators.cpp:761-785)."""
+    g.set("cpp_type", callback_interface.implemented_name)
+    if type_.nullable:
+        g.append(
+            "\n"
+            "    @cpp_type@* @cpp_name@ = nullptr;\n"
+            "    if (!@js_name@@js_suffix@.is_nullish()) {\n"
+            "        if (!@js_name@@js_suffix@.is_object())\n"
+            "            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
+            "\n"
+            "        auto callback_type = vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_object(), HTML::incumbent_realm());\n"
+            "        @cpp_name@ = TRY(throw_dom_exception_if_needed(vm, [&] { return @cpp_type@::create(realm, callback_type); }));\n"
+            "    }\n"
+        )
+    else:
+        g.append(
+            "\n"
+            "    if (!@js_name@@js_suffix@.is_object())\n"
+            "        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
+            "\n"
+            "    auto callback_type = vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_object(), HTML::incumbent_realm());\n"
+            "    auto @cpp_name@ = TRY(throw_dom_exception_if_needed(vm, [&] { return @cpp_type@::create(realm, callback_type); }));\n"
+        )
