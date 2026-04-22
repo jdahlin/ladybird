@@ -793,6 +793,10 @@ class Parser:
         kind: str,
     ) -> None:
         op = self._parse_regular_operation(extended_attributes, static=False)
+        # Mirror IDLParser.cpp:480-485: a named special operation is also
+        # appended to the regular operations list. Anonymous ones are not.
+        if op.name:
+            target.operations.append(op)
         if not op.parameters:
             raise ParseError(f"{kind} must have at least one parameter", self._peek(), self.filename)
         identifier_param_type = op.parameters[0].type

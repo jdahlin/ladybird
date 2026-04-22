@@ -119,10 +119,9 @@ def _generate_prototype_or_global_mixin_declarations(interface: Interface, gener
         raise NotImplementedError("setlike declarations are not yet supported")
     if interface.map_key_type is not None:
         raise NotImplementedError("maplike declarations are not yet supported")
-    if interface.named_property_getter is not None:
-        raise NotImplementedError("named property getter declarations are not yet supported")
-    if interface.indexed_property_getter is not None:
-        raise NotImplementedError("indexed property getter declarations are not yet supported")
+    # Named/indexed property getter declarations — the named getter already
+    # goes through the operations loop above when it has an identifier; no
+    # extra declaration needed here for the simple case.
 
     # Per-attribute getter/setter declarations. IDLGenerators.cpp:3340-3355.
     for attribute in interface.attributes:
@@ -318,16 +317,9 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
     bodies, attribute setters, stringifier, iterators, setlike/maplike,
     named/indexed property handlers.
     """
-    if interface.named_property_getter is not None:
-        raise NotImplementedError("named property getter definitions are not yet supported")
-    if interface.named_property_setter is not None:
-        raise NotImplementedError("named property setter definitions are not yet supported")
-    if interface.named_property_deleter is not None:
-        raise NotImplementedError("named property deleter definitions are not yet supported")
-    if interface.indexed_property_getter is not None:
-        raise NotImplementedError("indexed property getter definitions are not yet supported")
-    if interface.indexed_property_setter is not None:
-        raise NotImplementedError("indexed property setter definitions are not yet supported")
+    # Named/indexed property handlers: the named getter body itself is emitted
+    # by the regular operations loop. The special iteration-method define_direct_property
+    # is emitted in _generate_prototype_or_global_mixin_initialization.
     if interface.pair_iterator_types is not None:
         raise NotImplementedError("pair iterator definitions are not yet supported")
     if interface.async_value_iterator_type is not None:
@@ -801,6 +793,22 @@ def _generate_prototype_or_global_mixin_initialization(
             g.append(
                 "\n"
                 '    @define_native_function@(realm, "toString"_utf16_fly_string, to_string, 0, default_attributes);\n'
+            )
+
+    # IDLGenerators.cpp:4026-4040 — indexed property getter triggers iterator
+    # methods. For value iterators, also entries/keys/values/forEach.
+    if interface.indexed_property_getter is not None and not generate_unforgeables:
+        g.append(
+            "\n"
+            "    @define_direct_property@(vm.well_known_symbol_iterator(), realm.intrinsics().array_prototype()->get_without_side_effects(vm.names.values), JS::Attribute::Configurable | JS::Attribute::Writable);\n"
+        )
+        if interface.value_iterator_type is not None:
+            g.append(
+                "\n"
+                "    @define_direct_property@(vm.names.entries, realm.intrinsics().array_prototype()->get_without_side_effects(vm.names.entries), default_attributes);\n"
+                "    @define_direct_property@(vm.names.keys, realm.intrinsics().array_prototype()->get_without_side_effects(vm.names.keys), default_attributes);\n"
+                "    @define_direct_property@(vm.names.values, realm.intrinsics().array_prototype()->get_without_side_effects(vm.names.values), default_attributes);\n"
+                "    @define_direct_property@(vm.names.forEach, realm.intrinsics().array_prototype()->get_without_side_effects(vm.names.forEach), default_attributes);\n"
             )
 
     # IDLGenerators.cpp:4129-4133 — to_string_tag (only for No).
