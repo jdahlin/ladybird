@@ -1,11 +1,14 @@
-"""Corpus runner for the Python IDL parser.
+"""Corpus runner for the Python IDL parser and resolver.
 
-Walks Libraries/LibWeb/**/*.idl, parses each file, and reports failures.
+Walks Libraries/LibWeb/**/*.idl, parses each file, optionally runs the
+post-parse resolution passes (#import, partials, includes, typedefs,
+overload-set numbering), and reports failures.
 
 Usage:
-    python3 -m idl_bindings._corpus           # parse all, report failures grouped
-    python3 -m idl_bindings._corpus -v        # also list passing files
-    python3 -m idl_bindings._corpus -k <pat>  # only files whose path contains <pat>
+    python3 -m idl_bindings._corpus            # parse only
+    python3 -m idl_bindings._corpus --resolve  # parse + run all resolver passes
+    python3 -m idl_bindings._corpus -v         # also list passing files
+    python3 -m idl_bindings._corpus -k <pat>   # only files whose path contains <pat>
 """
 
 from __future__ import annotations
@@ -19,6 +22,11 @@ from pathlib import Path
 
 from .parser import ParseError
 from .parser import Parser
+from .resolver import ImportResolver
+from .resolver import apply_local_partials
+from .resolver import number_overload_sets
+from .resolver import resolve_includes
+from .resolver import resolve_typedefs
 
 
 def find_idl_files(root: Path) -> list[Path]:
@@ -28,12 +36,18 @@ def find_idl_files(root: Path) -> list[Path]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default="Libraries/LibWeb", help="root to walk")
+    ap.add_argument("--resolve", action="store_true", help="run all post-parse passes")
+    ap.add_argument(
+        "--strict-imports",
+        action="store_true",
+        help="fail on unresolvable #import (default: skip and continue)",
+    )
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("-k", "--keyword", default="", help="filter by substring of path")
     ap.add_argument("--max-fail-detail", type=int, default=20)
     args = ap.parse_args()
 
-    root = Path(args.root)
+    root = Path(args.root).resolve()
     files = find_idl_files(root)
     if args.keyword:
         files = [f for f in files if args.keyword in str(f)]
@@ -42,7 +56,14 @@ def main() -> int:
     for path in files:
         try:
             src = path.read_text()
-            Parser(src, str(path)).parse()
+            interface = Parser(src, str(path)).parse()
+            if args.resolve:
+                resolver = ImportResolver([root], strict=args.strict_imports)
+                resolver.resolve_for(interface)
+                apply_local_partials(interface)
+                resolve_includes(interface)
+                resolve_typedefs(interface)
+                number_overload_sets(interface)
             if args.verbose:
                 print(f"OK  {path}")
         except ParseError as exc:
