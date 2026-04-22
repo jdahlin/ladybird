@@ -695,7 +695,7 @@ _INTEGER_TO_VECTOR_TYPE = {
 def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
     """Port of idl_type_name_to_cpp_type (IDLGenerators.cpp:291-...).
 
-    Returns (cpp_type_name, "Vector"|"RootVector").
+    Returns (cpp_type_name, "Vector"|"GC::RootVector").
     """
     # Platform objects (interfaces): T → GC::Root<T>.
     if (
@@ -724,18 +724,18 @@ def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
         and t.name not in _INTEGER_TO_VECTOR_TYPE
     ):
         if _is_js_builtin_buffer_type(t.name):
-            return (f"GC::Root<JS::{t.name}>", "RootVector")
+            return (f"GC::Root<JS::{t.name}>", "GC::RootVector")
         if t.name in interface.callback_functions:
-            return ("GC::Root<WebIDL::CallbackType>", "RootVector")
+            return ("GC::Root<WebIDL::CallbackType>", "GC::RootVector")
         cb_iface = _find_callback_interface(interface, t.name)
         if cb_iface is not None:
-            return (f"GC::Root<{cb_iface.implemented_name}>", "RootVector")
+            return (f"GC::Root<{cb_iface.implemented_name}>", "GC::RootVector")
         if t.name in interface.enumerations:
             return (t.name, "Vector")
         if t.name in interface.dictionaries:
             return (t.name, "Vector")
         # Platform object.
-        return (f"GC::Root<{t.name}>", "RootVector")
+        return (f"GC::Root<{t.name}>", "GC::RootVector")
     if is_string(t):
         if "Utf16" in t.name:
             return ("Utf16String", "Vector")
@@ -749,7 +749,7 @@ def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
     if t.name in _INTEGER_TO_VECTOR_TYPE and not t.nullable:
         return (_INTEGER_TO_VECTOR_TYPE[t.name], "Vector")
     if t.name == "any":
-        return ("JS::Value", "RootVector")
+        return ("JS::Value", "GC::RootVector")
     raise NotImplementedError(f"idl_type_name_to_cpp_type for {t.name!r}")
 
 
@@ -793,8 +793,9 @@ def _generate_to_sequence(
     inner_cpp_name = f"{cpp_name}_non_optional" if (optional or type_.nullable) else cpp_name
     iterable_name = f"{js_name}{js_suffix}"
     iterator_method_name = f"{js_name}{js_suffix}_iterator_method{recursion_depth}"
+    # Use a fork so the inner generator's `cpp_name` rebind doesn't leak.
     _generate_sequence_from_iterable(
-        g,
+        g.fork(),
         type_,
         inner_cpp_name,
         iterable_name,

@@ -196,6 +196,20 @@ def generate_wrap_statement(
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
+    if type_.kind == "plain" and type_.name in interface.dictionaries:
+        # IDLGenerators.cpp:2273-2336 — wrap a struct into a JS object by
+        # iterating each member and create_data_property'ing it.
+        _generate_dictionary_wrap(
+            g,
+            type_,
+            value,
+            interface,
+            recursion_depth,
+            iteration_index,
+        )
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
     if type_.kind == "plain" and type_.name == "object":
         # IDLGenerators.cpp:2337-2340.
         g.append("\n    @result_expression@ JS::Value(const_cast<JS::Object*>(@value_non_optional@));\n")
@@ -205,6 +219,56 @@ def generate_wrap_statement(
     if type_.name == "Promise":
         # IDLGenerators.cpp:2186-2189.
         g.append("\n    @result_expression@ GC::Ref { as<JS::Promise>(*@value_non_optional@->promise()) };\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
+    if type_.kind == "parameterized" and type_.name in ("sequence", "FrozenArray"):
+        # IDLGenerators.cpp:2084-2132.
+        elem_type = type_.parameters[0]
+        g.append("\n    auto new_array@recursion_depth@_@iteration_index@ = MUST(JS::Array::create(realm, 0));\n")
+        if type_.nullable or is_optional:
+            g.append(
+                "\n"
+                "    auto& @value_cpp_name@_non_optional = @value@.value();\n"
+                "    for (size_t i@recursion_depth@ = 0; i@recursion_depth@ < @value_cpp_name@_non_optional.size(); ++i@recursion_depth@) {\n"
+                "        auto& element@recursion_depth@ = @value_cpp_name@_non_optional.at(i@recursion_depth@);\n"
+            )
+        else:
+            g.append(
+                "\n"
+                "    for (size_t i@recursion_depth@ = 0; i@recursion_depth@ < @value@.size(); ++i@recursion_depth@) {\n"
+                "        auto& element@recursion_depth@ = @value@.at(i@recursion_depth@);\n"
+            )
+        # Platform-object element: unwrap GC::Root via *element.
+        if elem_type.kind == "plain" and not (
+            is_string(elem_type)
+            or is_primitive(elem_type)
+            or elem_type.name in ("any", "object", "Promise", "BufferSource", "ArrayBufferView")
+            or elem_type.name in interface.enumerations
+            or elem_type.name in interface.dictionaries
+        ):
+            g.append("\n        auto* wrapped_element@recursion_depth@ = &(*element@recursion_depth@);\n")
+        else:
+            g.append("JS::Value wrapped_element@recursion_depth@;\n")
+            generate_wrap_statement(
+                g,
+                f"element{recursion_depth}",
+                elem_type,
+                interface,
+                f"wrapped_element{recursion_depth} =",
+                recursion_depth=recursion_depth + 1,
+            )
+        g.append(
+            "\n"
+            "        auto property_index@recursion_depth@ = JS::PropertyKey { i@recursion_depth@ };\n"
+            "        MUST(new_array@recursion_depth@_@iteration_index@->create_data_property(property_index@recursion_depth@, wrapped_element@recursion_depth@));\n"
+            "    }\n"
+        )
+        if type_.name == "FrozenArray":
+            g.append(
+                "\n    TRY(new_array@recursion_depth@_@iteration_index@->set_integrity_level(IntegrityLevel::Frozen));\n"
+            )
+        g.append("\n    @result_expression@ new_array@recursion_depth@_@iteration_index@;\n")
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
@@ -293,3 +357,67 @@ def attribute_cpp_name(attribute) -> str:
     if name:
         return name
     return _make_input_acceptable_cpp(_to_snakecase(attribute.name))
+
+
+def _generate_dictionary_wrap(g, type_, value, interface: Interface, recursion_depth, iteration_index) -> None:
+    """Port of the dictionary branch of generate_wrap_statement
+    (IDLGenerators.cpp:2273-2336).
+    """
+    from .prototype import _make_input_acceptable_cpp
+    from .prototype import _to_snakecase
+
+    g.append(
+        "\n"
+        "    {\n"
+        "        auto dictionary_object@recursion_depth@ = JS::Object::create(realm, realm.intrinsics().object_prototype());\n"
+    )
+    next_iteration = iteration_index + 1
+    current = interface.dictionaries[type_.name]
+    current_name = type_.name
+    while True:
+        for member in current.members:
+            g.set("member_key", member.name)
+            member_key_js = f"{_make_input_acceptable_cpp(_to_snakecase(member.name))}{recursion_depth}"
+            g.set("member_name", member_key_js)
+            member_value_js = f"{member_key_js}_value"
+            g.set("member_value", member_value_js)
+            wrapped_value_name = f"wrapped_{member_value_js}"
+            g.set("wrapped_value_name", wrapped_value_name)
+            is_opt = (
+                not member.required
+                and "GenerateAsRequired" not in member.extended_attributes
+                and member.default_value is None
+            )
+            if is_opt:
+                g.append("\n        Optional<JS::Value> @wrapped_value_name@;\n")
+            else:
+                g.append("\n        JS::Value @wrapped_value_name@;\n")
+            next_iteration += 1
+            sep = "->" if type_.nullable else "."
+            value_member = f"{value}{sep}{_to_snakecase(member.name)}"
+            generate_wrap_statement(
+                g,
+                value_member,
+                member.type,
+                interface,
+                f"{wrapped_value_name} =",
+                recursion_depth=recursion_depth + 1,
+                is_optional=is_opt,
+                iteration_index=next_iteration,
+            )
+            if is_opt:
+                g.append(
+                    "\n"
+                    "        if (@wrapped_value_name@.has_value())\n"
+                    '            MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@"_utf16_fly_string, @wrapped_value_name@.release_value()));\n'
+                )
+            else:
+                g.append(
+                    "\n"
+                    '        MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@"_utf16_fly_string, @wrapped_value_name@));\n'
+                )
+        if not current.parent_name or current.parent_name not in interface.dictionaries:
+            break
+        current_name = current.parent_name
+        current = interface.dictionaries[current_name]
+    g.append("\n        @result_expression@ dictionary_object@recursion_depth@;\n    }\n")

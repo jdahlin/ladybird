@@ -2,6 +2,7 @@
 Animations/DocumentTimeline.idl
 ARIA/ARIAMixin.idl
 Clipboard/ClipboardEvent.idl
+Clipboard/Clipboard.idl
 Compression/CompressionStream.idl
 Compression/DecompressionStream.idl
 ContentSecurityPolicy/SecurityPolicyViolationEvent.idl
@@ -23,6 +24,7 @@ CSS/CSSTransition.idl
 CSS/CSSTranslate.idl
 CSS/CSSUnitValue.idl
 CSS/CSSVariableReferenceValue.idl
+CSS/FontFaceSetLoadEvent.idl
 CSS/MediaQueryListEvent.idl
 CSS/MediaQueryList.idl
 CSS/TransitionEvent.idl
@@ -35,6 +37,7 @@ DOM/EventListener.idl
 DOM/Slottable.idl
 Encoding/TextDecoder.idl
 Encoding/TextEncoderCommon.idl
+Encoding/TextEncoder.idl
 Encoding/TextEncoderStream.idl
 EntriesAPI/FileSystemEntry.idl
 Fetch/Body.idl
@@ -44,6 +47,7 @@ Fullscreen/DocumentExtensions.idl
 Fullscreen/ElementExtensions.idl
 Gamepad/GamepadButton.idl
 Gamepad/GamepadEvent.idl
+Gamepad/Gamepad.idl
 Geolocation/Geolocation.idl
 Geolocation/GeolocationPositionError.idl
 GPC/GlobalPrivacyControl.idl
@@ -90,6 +94,7 @@ HTML/NavigateEvent.idl
 HTML/NavigationCurrentEntryChangeEvent.idl
 HTML/NavigationDestination.idl
 HTML/NavigationHistoryEntry.idl
+HTML/Navigation.idl
 HTML/NavigationType.idl
 HTML/NavigatorBeacon.idl
 HTML/NavigatorConcurrentHardware.idl
@@ -121,8 +126,11 @@ IndexedDB/IDBRecord.idl
 IndexedDB/IDBVersionChangeEvent.idl
 Internals/FakeXRDevice.idl
 Internals/InternalAnimationTimeline.idl
+Internals/InternalGamepad.idl
 Internals/WebUI.idl
+Internals/XRTest.idl
 MediaCapture/MediaStreamConstraints.idl
+MediaCapture/MediaStream.idl
 MediaCapture/MediaStreamTrackEvent.idl
 MediaSourceExtensions/BufferedChangeEvent.idl
 MediaSourceExtensions/ManagedMediaSource.idl
@@ -130,6 +138,7 @@ MediaSourceExtensions/ManagedSourceBuffer.idl
 MediaSourceExtensions/MediaSourceHandle.idl
 MediaSourceExtensions/SourceBuffer.idl
 NavigationTiming/PerformanceExtensions.idl
+PerformanceTimeline/PerformanceObserverEntryList.idl
 RequestIdleCallback/IdleDeadline.idl
 RequestIdleCallback/IdleRequest.idl
 ResizeObserver/ResizeObserverSize.idl
@@ -197,6 +206,7 @@ WebAudio/DynamicsCompressorNode.idl
 WebAudio/GainNode.idl
 WebAudio/OfflineAudioCompletionEvent.idl
 WebAudio/OscillatorNode.idl
+WebAudio/PeriodicWave.idl
 WebAudio/ScriptProcessorNode.idl
 WebAudio/StereoPannerNode.idl
 WebGL/Extensions/ANGLEInstancedArrays.idl
@@ -239,6 +249,7 @@ WebXR/XRLayer.idl
 WebXR/XRRenderState.idl
 WebXR/XRSessionEvent.idl
 WebXR/XRSession.idl
+WebXR/XRSystem.idl
 XHR/ProgressEvent.idl
 XHR/XMLHttpRequestEventTarget.idl
 XHR/XMLHttpRequestUpload.idl
