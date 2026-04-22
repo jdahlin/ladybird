@@ -317,8 +317,6 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
     bodies, attribute setters, stringifier, iterators, setlike/maplike,
     named/indexed property handlers.
     """
-    if interface.has_stringifier:
-        raise NotImplementedError("stringifier definitions are not yet supported")
     if interface.named_property_getter is not None:
         raise NotImplementedError("named property getter definitions are not yet supported")
     if interface.named_property_setter is not None:
@@ -411,6 +409,33 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
             raise NotImplementedError("[Default] operations not yet supported")
         generate_function(op, interface, class_name, static=False, generator=generator)
 
+    # IDLGenerators.cpp:4888-4915 — stringifier body.
+    if interface.has_stringifier:
+        sg = generator.fork()
+        sg.set("class_name", class_name)
+        from .prototype import _to_snakecase as _snake
+
+        if interface.stringifier_attribute is not None:
+            sg.set("attribute.cpp_getter_name", _snake(interface.stringifier_attribute.name))
+        sg.append(
+            "\n"
+            "JS_DEFINE_NATIVE_FUNCTION(@class_name@::to_string)\n"
+            "{\n"
+            '    WebIDL::log_trace(vm, "@class_name@::to_string");\n'
+            "    [[maybe_unused]] auto& realm = *vm.current_realm();\n"
+            "    auto* impl = TRY(impl_from(vm));\n"
+            "\n"
+        )
+        if interface.stringifier_attribute is not None:
+            sg.append(
+                "\n    auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@attribute.cpp_getter_name@(); }));\n"
+            )
+        else:
+            sg.append(
+                "\n    auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->to_string(); }));\n"
+            )
+        sg.append("\n\n    return JS::PrimitiveString::create(vm, move(retval));\n}\n")
+
 
 def _generate_attribute_getter(attribute, interface: Interface, class_name: str, generator: SourceGenerator) -> None:
     """Port of the simple-getter slice of generate_prototype_or_global_mixin_definitions
@@ -420,15 +445,34 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
     from .types import attribute_cpp_name
     from .types import generate_wrap_statement
 
-    if attribute.extended_attributes.keys() & {"Reflect", "CachedAttribute"}:
-        raise NotImplementedError(f"[Reflect]/[CachedAttribute] attribute body not yet supported ({attribute.name})")
+    if "CachedAttribute" in attribute.extended_attributes:
+        raise NotImplementedError(f"[CachedAttribute] not yet supported ({attribute.name})")
     if attribute.type and attribute.type.name == "Promise":
         raise NotImplementedError(f"Promise-typed attribute body not yet supported ({attribute.name})")
 
+    is_reflect = "Reflect" in attribute.extended_attributes
+    if is_reflect:
+        type_name = attribute.type.name if attribute.type else ""
+        is_nullable = bool(getattr(attribute.type, "nullable", False))
+        # Supported reflect type slice.
+        supported = (
+            (type_name == "DOMString" and not is_nullable and "Enumerated" not in attribute.extended_attributes)
+            or type_name == "boolean"
+            or (type_name == "USVString" and "URL" not in attribute.extended_attributes)
+            or type_name == "long"
+            or type_name == "unsigned long"
+        )
+        if not supported:
+            raise NotImplementedError(f"[Reflect] getter for type '{type_name}' not yet supported ({attribute.name})")
+
     g = generator.fork()
     g.set("class_name", class_name)
+    g.set("attribute.name", attribute.name)
     g.set("attribute.getter_callback", f"{attribute_callback_basename(attribute)}_getter")
     g.set("attribute.cpp_name", attribute_cpp_name(attribute))
+    if is_reflect:
+        reflect_name = attribute.extended_attributes.get("Reflect") or attribute.name.lower()
+        g.set("attribute.reflect_name", reflect_name)
 
     g.append(
         "\n"
@@ -438,9 +482,58 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
         "    [[maybe_unused]] auto& realm = *vm.current_realm();\n"
     )
     g.append("\n    [[maybe_unused]] auto* impl = TRY(impl_from(vm));\n")
-    g.append(
-        "\n    auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@attribute.cpp_name@(); }));\n"
-    )
+
+    if is_reflect:
+        type_name = attribute.type.name
+        if type_name == "DOMString":
+            g.append(
+                "\n"
+                '    auto contentAttributeValue = impl->attribute("@attribute.reflect_name@"_fly_string);\n'
+                "\n"
+                "    auto retval = contentAttributeValue.value_or(String {});\n"
+            )
+        elif type_name == "boolean":
+            g.append('\n    auto retval = impl->has_attribute("@attribute.reflect_name@"_fly_string);\n')
+        elif type_name == "long":
+            g.append(
+                "\n"
+                "    i32 retval = 0;\n"
+                '    auto content_attribute_value = impl->get_attribute("@attribute.reflect_name@"_fly_string);\n'
+                "    if (content_attribute_value.has_value()) {\n"
+                "        auto maybe_parsed_value = Web::HTML::parse_integer(*content_attribute_value);\n"
+                "        if (maybe_parsed_value.has_value())\n"
+                "            retval = *maybe_parsed_value;\n"
+                "    }\n"
+            )
+        elif type_name == "unsigned long":
+            g.append(
+                "\n"
+                "    u32 retval = 0;\n"
+                '    auto content_attribute_value = impl->get_attribute("@attribute.reflect_name@"_fly_string);\n'
+                "    u32 minimum = 0;\n"
+                "    u32 maximum = 2147483647;\n"
+                "    if (content_attribute_value.has_value()) {\n"
+                "        auto parsed_value = Web::HTML::parse_non_negative_integer(*content_attribute_value);\n"
+                "        if (parsed_value.has_value()) {\n"
+                "            if (*parsed_value >= minimum && *parsed_value <= maximum) {\n"
+                "                retval = *parsed_value;\n"
+                "            }\n"
+                "        }\n"
+                "    }\n"
+            )
+        elif type_name == "USVString":
+            g.append(
+                "\n"
+                '    auto content_attribute_value = impl->attribute("@attribute.reflect_name@"_fly_string);\n'
+                "\n"
+                "    String retval;\n"
+                "    if (content_attribute_value.has_value())\n"
+                "        retval = MUST(Infra::convert_to_scalar_value_string(*content_attribute_value));\n"
+            )
+    else:
+        g.append(
+            "\n    auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@attribute.cpp_name@(); }));\n"
+        )
     # generate_return_statement: just a wrap with "return" as result expression.
     generate_wrap_statement(g, "retval", attribute.type, interface, "return")
     g.append("\n}\n")
@@ -654,6 +747,20 @@ def _generate_prototype_or_global_mixin_initialization(
             '    @define_native_function@(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, default_attributes);\n'
         )
 
+    # IDLGenerators.cpp:4008-4022 — stringifier toString registration.
+    if getattr(interface, "has_stringifier", False):
+        should = True
+        stringifier_attr = getattr(interface, "stringifier_attribute", None)
+        if stringifier_attr is not None:
+            has_unf = "LegacyUnforgeable" in stringifier_attr.extended_attributes
+            if (generate_unforgeables and not has_unf) or (not generate_unforgeables and has_unf):
+                should = False
+        if should:
+            g.append(
+                "\n"
+                '    @define_native_function@(realm, "toString"_utf16_fly_string, to_string, 0, default_attributes);\n'
+            )
+
     # IDLGenerators.cpp:4129-4133 — to_string_tag (only for No).
     if not generate_unforgeables:
         g.append(
@@ -682,10 +789,22 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
     from .types import attribute_callback_basename
     from .types import attribute_cpp_name
 
-    if "Reflect" in attribute.extended_attributes:
-        raise NotImplementedError(f"[Reflect] setter not yet supported ({attribute.name})")
-    if "CEReactions" in attribute.extended_attributes:
-        raise NotImplementedError(f"[CEReactions] setter not yet supported ({attribute.name})")
+    is_reflect = "Reflect" in attribute.extended_attributes
+    has_ce = "CEReactions" in attribute.extended_attributes
+    if is_reflect:
+        type_name = attribute.type.name if attribute.type else ""
+        is_nullable = bool(getattr(attribute.type, "nullable", False))
+        if not (
+            (type_name == "DOMString" and not is_nullable)
+            or type_name == "boolean"
+            or type_name == "USVString"
+            or type_name == "long"
+            or (type_name == "unsigned long" and not is_nullable)
+            or (is_nullable and type_name not in ("Element",))
+        ):
+            # Element nullable, FrozenArray<Element>?, etc. not yet ported.
+            if is_nullable and type_name == "Element":
+                raise NotImplementedError(f"[Reflect] setter for Element? not yet supported ({attribute.name})")
 
     g = generator.fork()
     cb = attribute_callback_basename(attribute)
@@ -693,6 +812,9 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
     g.set("attribute.name", attribute.name)
     g.set("attribute.setter_callback", f"{cb}_setter")
     g.set("attribute.cpp_name", attribute_cpp_name(attribute))
+    if is_reflect:
+        reflect_name = attribute.extended_attributes.get("Reflect") or attribute.name.lower()
+        g.set("attribute.reflect_name", reflect_name)
 
     g.append(
         "\n"
@@ -722,6 +844,13 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
     )
     if "LegacyLenientThis" not in attribute.extended_attributes:
         g.append("\n    auto impl = TRY(maybe_impl);\n")
+
+    if has_ce:
+        g.append(
+            "\n"
+            "    auto& reactions_stack = HTML::relevant_similar_origin_window_agent(*impl).custom_element_reactions_stack;\n"
+            "    reactions_stack.element_queue_stack.append({});\n"
+        )
 
     if "Replaceable" in attribute.extended_attributes:
         g.append(
@@ -772,10 +901,67 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
         )
         return
 
-    # Coerce value into cpp_value, then call impl->set_<cpp_name>(cpp_value).
+    # Coerce value into cpp_value.
     generate_to_cpp(attribute, "value", "", "cpp_value", interface, g)
-    g.append(
-        "\n    TRY(throw_dom_exception_if_needed(vm, [&] { return impl->set_@attribute.cpp_name@(cpp_value); }));\n"
-    )
+
+    if is_reflect:
+        type_name = attribute.type.name
+        is_nullable = bool(getattr(attribute.type, "nullable", False))
+        if type_name == "boolean":
+            g.append(
+                "\n"
+                "    if (!cpp_value)\n"
+                '        impl->remove_attribute("@attribute.reflect_name@"_fly_string);\n'
+                "    else\n"
+                '        impl->set_attribute_value("@attribute.reflect_name@"_fly_string, String {});\n'
+            )
+        elif type_name == "unsigned long":
+            g.append(
+                "\n"
+                "    u32 minimum = 0;\n"
+                "    u32 new_value = minimum;\n"
+                "    if (cpp_value >= minimum && cpp_value <= 2147483647)\n"
+                "        new_value = cpp_value;\n"
+                '    impl->set_attribute_value("@attribute.reflect_name@"_fly_string, String::number(new_value));\n'
+            )
+        elif (
+            type_name in ("byte", "octet", "short", "unsigned short", "long", "long long", "unsigned long long")
+            and not is_nullable
+        ):
+            g.append(
+                '\n    impl->set_attribute_value("@attribute.reflect_name@"_fly_string, String::number(cpp_value));\n'
+            )
+        elif is_nullable:
+            g.append(
+                "\n"
+                "    if (!cpp_value.has_value())\n"
+                '        impl->remove_attribute("@attribute.reflect_name@"_fly_string);\n'
+                "    else\n"
+                '        impl->set_attribute_value("@attribute.reflect_name@"_fly_string, cpp_value.value());\n'
+            )
+        else:
+            g.append('\n    impl->set_attribute_value("@attribute.reflect_name@"_fly_string, cpp_value);\n')
+        if has_ce:
+            g.append(
+                "\n"
+                "    auto queue = reactions_stack.element_queue_stack.take_last();\n"
+                "    Bindings::invoke_custom_element_reactions(queue);\n"
+            )
+    else:
+        if not has_ce:
+            g.append(
+                "\n    TRY(throw_dom_exception_if_needed(vm, [&] { return impl->set_@attribute.cpp_name@(cpp_value); }));\n"
+            )
+        else:
+            g.append(
+                "\n"
+                "    auto maybe_exception = throw_dom_exception_if_needed(vm, [&] { return impl->set_@attribute.cpp_name@(cpp_value); });\n"
+                "\n"
+                "    auto queue = reactions_stack.element_queue_stack.take_last();\n"
+                "    Bindings::invoke_custom_element_reactions(queue);\n"
+                "\n"
+                "    if (maybe_exception.is_error())\n"
+                "        return maybe_exception.release_error();\n"
+            )
 
     g.append("\n    return JS::js_undefined();\n}\n")

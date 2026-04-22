@@ -425,23 +425,33 @@ def _generate_to_any(g, *, optional, optional_default_value, variadic):
 
 
 def _generate_to_object(g, type_, *, optional):
-    if optional or type_.nullable:
+    # Port of generate_object_to_cpp (IDLGenerators.cpp:893-923).
+    if type_.nullable:
         g.append(
             "\n"
-            "    JS::Object* @cpp_name@ = nullptr;\n"
-            "    if (!@js_name@@js_suffix@.is_nullish()) {\n"
+            "    Optional<GC::Root<JS::Object>> @cpp_name@;\n"
+            "    if (!@js_name@@js_suffix@.is_null() && !@js_name@@js_suffix@.is_undefined()) {\n"
             "        if (!@js_name@@js_suffix@.is_object())\n"
-            '            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, "@parameter.name@");\n'
-            "        @cpp_name@ = &@js_name@@js_suffix@.as_object();\n"
+            "            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
+            "        @cpp_name@ = GC::make_root(@js_name@@js_suffix@.as_object());\n"
+            "    }\n"
+        )
+    elif optional:
+        g.append(
+            "\n"
+            "    Optional<GC::Root<JS::Object>> @cpp_name@;\n"
+            "    if (!@js_name@@js_suffix@.is_undefined()) {\n"
+            "        if (!@js_name@@js_suffix@.is_object())\n"
+            "            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
+            "        @cpp_name@ = GC::make_root(@js_name@@js_suffix@.as_object());\n"
             "    }\n"
         )
     else:
         g.append(
             "\n"
             "    if (!@js_name@@js_suffix@.is_object())\n"
-            '        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, "@parameter.name@");\n'
-            "\n"
-            "    auto& @cpp_name@ = @js_name@@js_suffix@.as_object();\n"
+            "        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
+            "    auto @cpp_name@ = GC::make_root(@js_name@@js_suffix@.as_object());\n"
         )
 
 
