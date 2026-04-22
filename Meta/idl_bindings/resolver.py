@@ -141,6 +141,13 @@ class ImportResolver:
                 _extend_with_partial_interface(target, partial)
 
         for name, dictionary in imported.dictionaries.items():
+            # Only copy in if the target doesn't already have a local (original)
+            # definition — the C++ parser processes #imports first and local
+            # declarations afterward, so locals naturally win there. We mirror
+            # that order-sensitivity here without changing our evaluation order.
+            existing = target.dictionaries.get(name)
+            if existing is not None and existing.is_original_definition:
+                continue
             copy = Dictionary(
                 extended_attributes=dict(dictionary.extended_attributes),
                 parent_name=dictionary.parent_name,
@@ -153,6 +160,9 @@ class ImportResolver:
             target.partial_dictionaries.setdefault(name, []).extend(partials)
 
         for name, enumeration in imported.enumerations.items():
+            existing = target.enumerations.get(name)
+            if existing is not None and existing.is_original_definition:
+                continue
             # Copy with is_original_definition=False.
             copy_enum = type(enumeration)(
                 extended_attributes=dict(enumeration.extended_attributes),

@@ -94,6 +94,9 @@ def generate_to_cpp(
     if type_.kind == "plain" and (type_.name == "BufferSource" or _is_js_builtin_buffer_type(type_.name)):
         _generate_to_buffer_source(g, type_, optional=optional)
         return
+    if type_.kind == "plain" and type_.name == "ArrayBufferView":
+        _generate_to_array_buffer_view(g, type_, optional=optional)
+        return
     if is_enum(type_, interface):
         # Attribute setters return undefined instead of throwing on invalid
         # enum values (IDLGenerators.cpp:1872-1876).
@@ -400,8 +403,10 @@ def _generate_to_any(g, *, optional, optional_default_value, variadic):
         g.append(
             "\n"
             "    GC::RootVector<JS::Value> @cpp_name@ { vm.heap() };\n"
+            "\n"
             "    if (vm.argument_count() > @js_suffix@) {\n"
             "        @cpp_name@.ensure_capacity(vm.argument_count() - @js_suffix@);\n"
+            "\n"
             "        for (size_t i = @js_suffix@; i < vm.argument_count(); ++i)\n"
             "            @cpp_name@.unchecked_append(vm.argument(i));\n"
             "    }\n"
@@ -657,6 +662,24 @@ def _generate_to_promise(g) -> None:
         "    // 3. Return promiseCapability.\n"
         "    auto @cpp_name@ = GC::make_root(promise_capability);\n"
     )
+
+
+def _generate_to_array_buffer_view(g, type_, *, optional) -> None:
+    """Port of generate_array_buffer_view_to_cpp (IDLGenerators.cpp:978-1007)."""
+    g.append("\n    GC::Root<WebIDL::ArrayBufferView> @cpp_name@;\n")
+    if type_.nullable:
+        g.append("\n    if (!@js_name@@js_suffix@.is_null() && !@js_name@@js_suffix@.is_undefined()) {\n")
+    g.append(
+        "\n"
+        "        if (!@js_name@@js_suffix@.is_object() || !(is<JS::TypedArrayBase>(@js_name@@js_suffix@.as_object()) || is<JS::DataView>(@js_name@@js_suffix@.as_object())))\n"
+        '            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
+        "\n"
+        "        @cpp_name@ = GC::make_root(realm.create<WebIDL::ArrayBufferView>(@js_name@@js_suffix@.as_object()));\n"
+    )
+    if type_.nullable:
+        g.append("\n    }\n")
+    if optional:
+        g.append("\n        }\n")
 
 
 def _generate_to_buffer_source(g, type_, *, optional) -> None:

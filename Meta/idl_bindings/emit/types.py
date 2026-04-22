@@ -40,6 +40,171 @@ _IDL_STRING_NAMES = frozenset(
 )
 
 
+# Hand-curated list mirroring is_platform_object in IDLGenerators.cpp:31-199.
+_PLATFORM_OBJECT_TYPES = frozenset(
+    {
+        "AbortSignal",
+        "Animation",
+        "AnimationEffect",
+        "AnimationTimeline",
+        "Attr",
+        "AudioBuffer",
+        "AudioContext",
+        "AudioListener",
+        "AudioNode",
+        "AudioParam",
+        "AudioScheduledSourceNode",
+        "AudioTrack",
+        "BaseAudioContext",
+        "Blob",
+        "CacheStorage",
+        "CanvasGradient",
+        "CanvasPattern",
+        "CanvasRenderingContext2D",
+        "ClipboardItem",
+        "CloseWatcher",
+        "Credential",
+        "CredentialsContainer",
+        "CryptoKey",
+        "CSSKeywordValue",
+        "CSSNumericArray",
+        "CSSNumericValue",
+        "CSSStyleValue",
+        "CSSTransformComponent",
+        "CSSUnitValue",
+        "CSSUnparsedValue",
+        "CSSVariableReferenceValue",
+        "CustomElementRegistry",
+        "CustomStateSet",
+        "DataTransfer",
+        "Document",
+        "DocumentType",
+        "DOMMatrix",
+        "DOMMatrixReadOnly",
+        "DOMRectReadOnly",
+        "DynamicsCompressorNode",
+        "ElementInternals",
+        "EventTarget",
+        "External",
+        "FederatedCredential",
+        "File",
+        "FileList",
+        "FontFace",
+        "FormData",
+        "Gamepad",
+        "GamepadButton",
+        "GamepadHapticActuator",
+        "HTMLCollection",
+        "IDBCursor",
+        "IDBCursorWithValue",
+        "IDBIndex",
+        "IDBKeyRange",
+        "IDBObjectStore",
+        "IDBRecord",
+        "IDBTransaction",
+        "ImageBitmap",
+        "ImageData",
+        "Instance",
+        "IntersectionObserverEntry",
+        "KeyframeEffect",
+        "MediaKeySystemAccess",
+        "MediaList",
+        "MediaDeviceInfo",
+        "MediaDevices",
+        "MediaSource",
+        "Memory",
+        "MediaStream",
+        "MediaStreamTrack",
+        "MediaStreamTrackEvent",
+        "MessagePort",
+        "Module",
+        "MutationRecord",
+        "NamedNodeMap",
+        "NavigationDestination",
+        "NavigationHistoryEntry",
+        "Node",
+        "OffscreenCanvas",
+        "OffscreenCanvasRenderingContext2D",
+        "Origin",
+        "PasswordCredential",
+        "Path2D",
+        "PerformanceEntry",
+        "PerformanceMark",
+        "PerformanceNavigation",
+        "PeriodicWave",
+        "ReadableStreamBYOBReader",
+        "ReadableStreamDefaultReader",
+        "RadioNodeList",
+        "Range",
+        "ReadableStream",
+        "Request",
+        "Response",
+        "Selection",
+        "ServiceWorkerContainer",
+        "ServiceWorkerRegistration",
+        "SVGLength",
+        "SVGNumber",
+        "SVGTransform",
+        "ShadowRoot",
+        "SourceBuffer",
+        "SpeechGrammar",
+        "SpeechGrammarList",
+        "SpeechRecognition",
+        "SpeechRecognitionAlternative",
+        "SpeechRecognitionPhrase",
+        "SpeechRecognitionResult",
+        "SpeechRecognitionResultList",
+        "SpeechSynthesis",
+        "SpeechSynthesisUtterance",
+        "SpeechSynthesisVoice",
+        "Storage",
+        "Table",
+        "Text",
+        "TextMetrics",
+        "TextTrack",
+        "TimeRanges",
+        "TrustedHTML",
+        "TrustedScript",
+        "TrustedScriptURL",
+        "TrustedTypePolicy",
+        "TrustedTypePolicyFactory",
+        "URLSearchParams",
+        "VTTRegion",
+        "VideoTrack",
+        "VideoTrackList",
+        "ViewTransition",
+        "WebGL2RenderingContext",
+        "WebGLActiveInfo",
+        "WebGLBuffer",
+        "WebGLFramebuffer",
+        "WebGLObject",
+        "WebGLProgram",
+        "WebGLQuery",
+        "WebGLRenderbuffer",
+        "WebGLRenderingContext",
+        "WebGLSampler",
+        "WebGLShader",
+        "WebGLShaderPrecisionFormat",
+        "WebGLSync",
+        "WebGLTexture",
+        "WebGLTransformFeedback",
+        "WebGLUniformLocation",
+        "WebGLVertexArrayObject",
+        "WebGLVertexArrayObjectOES",
+        "Window",
+        "WindowProxy",
+        "WritableStream",
+        "XPathResult",
+        "XRSession",
+        "XRWebGLLayer",
+    }
+)
+
+
+def _is_platform_object_name(name: str) -> bool:
+    return name.endswith("Element") or name.endswith("Event") or name in _PLATFORM_OBJECT_TYPES
+
+
 def is_string(type_: Type) -> bool:
     return type_.kind == "plain" and type_.name in _IDL_STRING_NAMES
 
@@ -179,6 +344,14 @@ def generate_wrap_statement(
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
+    # IDLGenerators.cpp:2269-2272 — callback interface.
+    from .to_cpp import _find_callback_interface
+
+    if _find_callback_interface(interface, type_.name) is not None:
+        g.append("\n  @result_expression@ @value@->callback().callback;\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
     if type_.kind == "plain" and type_.name in interface.callback_functions:
         # IDLGenerators.cpp:2249-2268.
         callback = interface.callback_functions[type_.name]
@@ -240,13 +413,7 @@ def generate_wrap_statement(
                 "        auto& element@recursion_depth@ = @value@.at(i@recursion_depth@);\n"
             )
         # Platform-object element: unwrap GC::Root via *element.
-        if elem_type.kind == "plain" and not (
-            is_string(elem_type)
-            or is_primitive(elem_type)
-            or elem_type.name in ("any", "object", "Promise", "BufferSource", "ArrayBufferView")
-            or elem_type.name in interface.enumerations
-            or elem_type.name in interface.dictionaries
-        ):
+        if elem_type.kind == "plain" and _is_platform_object_name(elem_type.name):
             g.append("\n        auto* wrapped_element@recursion_depth@ = &(*element@recursion_depth@);\n")
         else:
             g.append("JS::Value wrapped_element@recursion_depth@;\n")

@@ -846,7 +846,10 @@ class Parser:
         # for special operations). If `(` is next we have an anonymous form.
         name = ""
         if self._peek().kind is TokenKind.IDENTIFIER:
-            name = self._advance().value
+            # Mirror IDLParser.cpp:142 — strip leading underscores (WebIDL allows
+            # `_keyword` to escape contextual keywords like `_any`).
+            raw = self._advance().value
+            name = raw.lstrip("_") if raw.startswith("_") else raw
         parameters = self._parse_parameter_list()
         self._expect_punct(";")
         return Operation(
