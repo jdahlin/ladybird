@@ -28,10 +28,9 @@ def generate_function(
     static: bool,
     generator: SourceGenerator,
 ) -> None:
-    if "CEReactions" in function.extended_attributes:
-        raise NotImplementedError("[CEReactions] operations not yet supported")
-    if static:
-        raise NotImplementedError("static operations not yet supported")
+    has_ce = "CEReactions" in function.extended_attributes
+    if has_ce and static:
+        raise NotImplementedError("[CEReactions] static operations not yet supported")
 
     from .prototype import _make_input_acceptable_cpp
     from .prototype import _to_snakecase
@@ -49,6 +48,7 @@ def generate_function(
 
     cpp_name = function.extended_attributes.get("ImplementedAs") or snake
     g.set("function.cpp_name", cpp_name)
+    g.set("interface_fully_qualified_name", interface.fully_qualified_name)
 
     # IDLGenerators.cpp:2402-2407 — opener.
     g.append(
@@ -68,22 +68,49 @@ def generate_function(
         )
 
     # impl_from for non-static (IDLGenerators.cpp:2417-2421).
-    g.append("\n    auto* impl = TRY(impl_from(vm));\n")
+    if not static:
+        g.append("\n    auto* impl = TRY(impl_from(vm));\n")
 
     # IDLGenerators.cpp:2424-2425 — argument count check.
-    _generate_argument_count_check(function, generator)
+    if not getattr(function, "is_overloaded", False):
+        _generate_argument_count_check(function, generator)
 
     # IDLGenerators.cpp:2427-2429 — coerce each argument.
     from .to_cpp import generate_arguments
 
     args = generate_arguments(function.parameters, interface, g)
-    g.set(".arguments", args)
 
-    # IDLGenerators.cpp:2442-2445 — call.
-    g.append(
-        "\n"
-        "    [[maybe_unused]] auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@function.cpp_name@(@.arguments@); }));\n"
-    )
+    if static:
+        # IDLGenerators.cpp:2466-2473 — first arg is vm.
+        full_args = "vm" if not args else f"vm, {args}"
+        g.set(".arguments", full_args)
+        g.append(
+            "\n"
+            "    [[maybe_unused]] auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return @interface_fully_qualified_name@::@function.cpp_name@(@.arguments@); }));\n"
+        )
+    else:
+        g.set(".arguments", args)
+        if has_ce:
+            g.append(
+                "\n"
+                "    auto& reactions_stack = HTML::relevant_similar_origin_window_agent(*impl).custom_element_reactions_stack;\n"
+                "    reactions_stack.element_queue_stack.append({});\n"
+                "\n"
+                "    auto retval_or_exception = throw_dom_exception_if_needed(vm, [&] { return impl->@function.cpp_name@(@.arguments@); });\n"
+                "\n"
+                "    auto queue = reactions_stack.element_queue_stack.take_last();\n"
+                "    Bindings::invoke_custom_element_reactions(queue);\n"
+                "\n"
+                "    if (retval_or_exception.is_error())\n"
+                "        return retval_or_exception.release_error();\n"
+                "\n"
+                "    [[maybe_unused]] auto retval = retval_or_exception.release_value();\n"
+            )
+        else:
+            g.append(
+                "\n"
+                "    [[maybe_unused]] auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@function.cpp_name@(@.arguments@); }));\n"
+            )
 
     if is_promise:
         g.append(

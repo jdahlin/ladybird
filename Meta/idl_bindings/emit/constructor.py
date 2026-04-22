@@ -175,13 +175,44 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
 
     if interface.static_attributes:
         raise NotImplementedError("static attributes are not yet supported on this rung")
-    if interface.static_operations:
-        raise NotImplementedError("static operations are not yet supported on this rung")
 
+    # IDLGenerators.cpp:5734 — define_the_operations(static_overload_sets).
+    from .prototype import _make_input_acceptable_cpp
+    from .prototype import _to_snakecase
+
+    g.set("define_native_function", "define_native_function")
+    static_groups: dict[str, list] = {}
+    for op in interface.static_operations:
+        if "FIXME" in op.extended_attributes:
+            continue
+        static_groups.setdefault(op.name, []).append(op)
+    for name, group in static_groups.items():
+        first = group[0]
+        attrs = (
+            "JS::Attribute::Enumerable"
+            if "LegacyUnforgable" in first.extended_attributes
+            else "JS::Attribute::Writable | JS::Attribute::Enumerable | JS::Attribute::Configurable"
+        )
+        og = g.fork()
+        og.set("function.name", name)
+        og.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
+        og.set("function.length", str(min(_shortest_length(o.parameters) for o in group)))
+        og.set("function.attributes", attrs)
+        og.append(
+            "\n"
+            '    @define_native_function@(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, @function.attributes@);\n'
+        )
     g.append("\n}\n")
 
-    # Static-attribute / static-function implementations follow here at later
-    # rungs; for the empty interface none.
+    # IDLGenerators.cpp:5770-5780 — JS_DEFINE_NATIVE_FUNCTION for each static op.
+    from .operations import generate_function
+
+    for op in interface.static_operations:
+        if "FIXME" in op.extended_attributes:
+            continue
+        generate_function(op, interface, interface.constructor_class, static=True, generator=g)
+    if any(getattr(op, "is_overloaded", False) for op in interface.static_operations):
+        raise NotImplementedError("static operation overload arbiter not yet supported")
 
     # IDLGenerators.cpp:5782-5783 — trailing blank line in raw string.
     g.append("\n")

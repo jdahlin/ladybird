@@ -458,7 +458,7 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
         supported = (
             (type_name == "DOMString" and not is_nullable and "Enumerated" not in attribute.extended_attributes)
             or type_name == "boolean"
-            or (type_name == "USVString" and "URL" not in attribute.extended_attributes)
+            or type_name == "USVString"
             or type_name == "long"
             or type_name == "unsigned long"
         )
@@ -522,9 +522,18 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
                 "    }\n"
             )
         elif type_name == "USVString":
+            g.append('\n    auto content_attribute_value = impl->attribute("@attribute.reflect_name@"_fly_string);\n')
+            if "URL" in attribute.extended_attributes:
+                g.append(
+                    "\n"
+                    "    if (!content_attribute_value.has_value())\n"
+                    "        return JS::PrimitiveString::create(vm, String {});\n"
+                    "\n"
+                    "    auto url_string = impl->document().encoding_parse_and_serialize_url(*content_attribute_value);\n"
+                    "    if (url_string.has_value())\n"
+                    "        return JS::PrimitiveString::create(vm, url_string.release_value());\n"
+                )
             g.append(
-                "\n"
-                '    auto content_attribute_value = impl->attribute("@attribute.reflect_name@"_fly_string);\n'
                 "\n"
                 "    String retval;\n"
                 "    if (content_attribute_value.has_value())\n"
