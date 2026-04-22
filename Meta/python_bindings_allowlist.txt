@@ -43,6 +43,7 @@ Fullscreen/DocumentExtensions.idl
 Fullscreen/ElementExtensions.idl
 Gamepad/GamepadButton.idl
 Gamepad/GamepadEvent.idl
+Geolocation/Geolocation.idl
 Geolocation/GeolocationPositionError.idl
 GPC/GlobalPrivacyControl.idl
 HighResolutionTime/DOMHighResTimeStamp.idl
@@ -72,6 +73,7 @@ HTML/CanvasPattern.idl
 HTML/CloseEvent.idl
 HTML/CloseWatcher.idl
 HTML/CommandEvent.idl
+HTML/DataTransferItem.idl
 HTML/ErrorEvent.idl
 HTML/External.idl
 HTML/FormDataEvent.idl
@@ -82,6 +84,7 @@ HTML/HTMLOrSVGElement.idl
 HTML/MediaError.idl
 HTML/MessageChannel.idl
 HTML/MimeType.idl
+HTML/NavigateEvent.idl
 HTML/NavigationDestination.idl
 HTML/NavigationHistoryEntry.idl
 HTML/NavigationType.idl
@@ -165,6 +168,7 @@ SVG/SVGLength.idl
 SVG/SVGNumber.idl
 SVG/SVGUnitTypes.idl
 SVG/SVGURIReference.idl
+TrustedTypes/TrustedTypePolicyFactory.idl
 UIEvents/PointerEventHandlers.idl
 UserTiming/PerformanceMark.idl
 UserTiming/PerformanceMeasure.idl

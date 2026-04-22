@@ -105,6 +105,11 @@ class Parser:
         tok = self._advance()
         if tok.kind is not TokenKind.IDENTIFIER:
             raise ParseError(f"expected identifier, got {tok.value!r}", tok, self.filename)
+        # Mirror IDLParser.cpp:142 — trim leading underscores. WebIDL allows
+        # `_keyword` (e.g. `_callback`, `_default`) to escape contextual
+        # keywords without changing the actual identifier name.
+        if tok.value.startswith("_"):
+            tok = Token(tok.kind, tok.value.lstrip("_"), tok.line, tok.column)
         return tok
 
     # --- entry point ---

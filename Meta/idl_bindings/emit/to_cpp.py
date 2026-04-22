@@ -200,7 +200,10 @@ def _generate_to_callback_function(generator, type_, interface: Interface, *, op
         g.set("operation_returns_promise", "WebIDL::OperationReturnsPromise::No")
 
     if not type_.nullable and not callback.is_legacy_treat_non_object_as_null:
-        g.append("\n    if (!@js_name@@js_suffix@.is_function()")
+        # Match the C++ raw-string literal layout: the opener ends with `\n`
+        # before the optional `&&` clause, so without the optional clause
+        # the `)` falls onto a separate line.
+        g.append("\n    if (!@js_name@@js_suffix@.is_function()\n")
         if optional:
             g.append("&& !@js_name@@js_suffix@.is_undefined()")
         g.append(
