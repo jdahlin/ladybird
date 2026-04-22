@@ -27,8 +27,8 @@ from .source_generator import SourceGenerator
 def _interface_prototype_has_immutable_prototype(interface: Interface) -> bool:
     if "Global" in interface.extended_attributes:
         return True
-    # The C++ helper also checks for "LegacyPlatformObject"-shape interfaces
-    # (those with named property handlers). Add when concept ladder reaches them.
+    if interface.name in ("WorkerGlobalScope", "EventTarget"):
+        return True
     return False
 
 

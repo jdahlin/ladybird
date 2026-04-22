@@ -954,7 +954,7 @@ def _generate_to_union(
             "        // This might be unused.\n"
             "        (void)realm;\n"
         )
-        dict_param = Parameter(type=dictionary_type, name=cpp_name, optional_default_value=None, extended_attributes={})
+        dict_param = Parameter(name=cpp_name, type=dictionary_type, extended_attributes={})
         generate_to_cpp(
             dict_param,
             js_name,
@@ -1091,12 +1091,20 @@ def _generate_to_union(
     sequence_type = next((t for t in types if t.name == "sequence"), None)
     if sequence_type is not None:
         ug.append(
-            "\n"
-            "        auto method = TRY(@js_name@@js_suffix@.get_method(vm, vm.well_known_symbol_iterator()));\n"
-            "        if (method) {\n"
+            "\n        auto method = TRY(@js_name@@js_suffix@.get_method(vm, vm.well_known_symbol_iterator()));\n"
         )
+        ug.append("\n        if (method) {\n")
+        elem_cpp, elem_storage = _idl_type_name_to_cpp_type(sequence_type.parameters[0], interface)
         _generate_sequence_from_iterable(
-            ug, sequence_type, cpp_name, f"{js_name}{js_suffix}", "method", interface, recursion_depth + 1
+            ug,
+            sequence_type,
+            cpp_name,
+            f"{js_name}{js_suffix}",
+            "method",
+            interface,
+            recursion_depth + 1,
+            elem_cpp,
+            elem_storage,
         )
         ug.append("\n\n            return @cpp_name@;\n        }\n")
 
@@ -1105,7 +1113,7 @@ def _generate_to_union(
 
     record_type = next((t for t in types if t.name == "record"), None)
     if record_type is not None:
-        rec_param = Parameter(type=record_type, name=cpp_name, optional_default_value=None, extended_attributes={})
+        rec_param = Parameter(name=cpp_name, type=record_type, extended_attributes={})
         generate_to_cpp(
             rec_param,
             js_name,
@@ -1124,7 +1132,7 @@ def _generate_to_union(
         cb = _find_callback_interface(interface, t.name)
         if cb is None:
             continue
-        cb_param = Parameter(type=t, name=cpp_name, optional_default_value=None, extended_attributes={})
+        cb_param = Parameter(name=cpp_name, type=t, extended_attributes={})
         generate_to_cpp(
             cb_param,
             js_name,
@@ -1172,9 +1180,7 @@ def _generate_to_union(
     numeric_type = next((t for t in types if _is_numeric(t)), None)
     if numeric_type is not None:
         ug.append("\n        if (@js_name@@js_suffix@.is_number()) {\n")
-        num_param = Parameter(
-            type=numeric_type, name=parameter.name, optional_default_value=None, extended_attributes={}
-        )
+        num_param = Parameter(type=numeric_type, name=parameter.name, default_value=None, extended_attributes={})
         generate_to_cpp(
             num_param,
             js_name,
@@ -1248,9 +1254,7 @@ def _generate_to_union(
             "            return x.as_bigint();\n"
             "        VERIFY(x.is_number());\n"
         )
-        num_param = Parameter(
-            type=numeric_type, name=parameter.name, optional_default_value=None, extended_attributes={}
-        )
+        num_param = Parameter(type=numeric_type, name=parameter.name, default_value=None, extended_attributes={})
         generate_to_cpp(
             num_param,
             "x",
@@ -1265,9 +1269,7 @@ def _generate_to_union(
         )
         ug.append("\n        return x_number;\n")
     elif numeric_type is not None:
-        num_param = Parameter(
-            type=numeric_type, name=parameter.name, optional_default_value=None, extended_attributes={}
-        )
+        num_param = Parameter(type=numeric_type, name=parameter.name, default_value=None, extended_attributes={})
         generate_to_cpp(
             num_param,
             js_name,
