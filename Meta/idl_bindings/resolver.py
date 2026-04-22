@@ -344,13 +344,18 @@ def resolve_typedefs(interface: Interface) -> None:
         td = typedefs.get(type_.name)
         if td is None or td.type is None:
             return type_
+        # Mirror IDLParser.cpp:1212-1214 — the use-site nullable OVERWRITES
+        # the typedef target's nullability. Counter-intuitive but matches
+        # the C++ behavior: `typedef Foo? Bar; attribute Bar baz;` resolves
+        # with baz.type.nullable = false. (You'd need `attribute Bar? baz;`
+        # to get nullable.)
         nullable = type_.nullable
         if attrs is not None:
             for k, v in td.extended_attributes.items():
                 attrs.setdefault(k, v)
         # Recursively resolve in case the typedef points to another typedef.
         new_type = _shallow_copy_type(td.type)
-        new_type.nullable = nullable or new_type.nullable
+        new_type.nullable = nullable
         new_type = resolve_type(new_type, attrs)
         return new_type
 

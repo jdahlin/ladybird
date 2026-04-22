@@ -187,26 +187,32 @@ def _generate_to_dictionary(generator, type_, interface: Interface) -> None:
 
 
 def _generate_to_callback_function(generator, type_, interface: Interface, *, optional) -> None:
-    """Port of generate_callback_function_to_cpp (~IDLGenerators.cpp:840)."""
+    """Port of generate_callback_function_to_cpp (IDLGenerators.cpp:1184-1220)."""
     g = generator
-    g.set("cpp_type", "WebIDL::CallbackType")
-    if optional or type_.nullable:
+    callback = interface.callback_functions[type_.name]
+    if callback.return_type and callback.return_type.kind == "parameterized" and callback.return_type.name == "Promise":
+        g.set("operation_returns_promise", "WebIDL::OperationReturnsPromise::Yes")
+    else:
+        g.set("operation_returns_promise", "WebIDL::OperationReturnsPromise::No")
+
+    if not type_.nullable and not callback.is_legacy_treat_non_object_as_null:
+        g.append("\n    if (!@js_name@@js_suffix@.is_function()")
+        if optional:
+            g.append("&& !@js_name@@js_suffix@.is_undefined()")
+        g.append(
+            ")\n        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAFunction, @js_name@@js_suffix@);\n"
+        )
+    if optional or type_.nullable or callback.is_legacy_treat_non_object_as_null:
         g.append(
             "\n"
             "    GC::Ptr<WebIDL::CallbackType> @cpp_name@;\n"
-            "    if (!@js_name@@js_suffix@.is_nullish()) {\n"
-            "        if (!@js_name@@js_suffix@.is_object())\n"
-            "            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
-            "        @cpp_name@ = vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_object(), HTML::incumbent_realm());\n"
-            "    }\n"
+            "    if (@js_name@@js_suffix@.is_object())\n"
+            "        @cpp_name@ = vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_object(), HTML::incumbent_realm(), @operation_returns_promise@);\n"
         )
     else:
         g.append(
             "\n"
-            "    if (!@js_name@@js_suffix@.is_object())\n"
-            "        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
-            "\n"
-            "    auto @cpp_name@ = vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_object(), HTML::incumbent_realm());\n"
+            "    auto @cpp_name@ = vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_object(), HTML::incumbent_realm(), @operation_returns_promise@);\n"
         )
 
 
@@ -375,25 +381,21 @@ def _generate_to_any(g, *, optional, optional_default_value, variadic):
             "    }\n"
         )
         return
-    if optional and optional_default_value is None:
+    if not optional:
+        g.append("\n    auto @cpp_name@ = @js_name@@js_suffix@;\n")
+    else:
         g.append(
             "\n"
             "    JS::Value @cpp_name@ = JS::js_undefined();\n"
             "    if (!@js_name@@js_suffix@.is_undefined())\n"
             "        @cpp_name@ = @js_name@@js_suffix@;\n"
         )
-    elif optional and optional_default_value is not None:
-        if optional_default_value == "null":
-            g.append(
-                "\n"
-                "    JS::Value @cpp_name@ = JS::js_null();\n"
-                "    if (!@js_name@@js_suffix@.is_undefined())\n"
-                "        @cpp_name@ = @js_name@@js_suffix@;\n"
-            )
-        else:
-            raise NotImplementedError(f"any default {optional_default_value!r}")
-    else:
-        g.append("\n    JS::Value @cpp_name@ = @js_name@@js_suffix@;\n")
+        if optional_default_value is not None:
+            if optional_default_value == "null":
+                g.append("\n    else\n        @cpp_name@ = JS::js_null();\n")
+            else:
+                # Numeric default (int / unsigned).
+                g.append("\n    else\n        @cpp_name@ = JS::Value(@parameter.optional_default_value@);\n")
 
 
 def _generate_to_object(g, type_, *, optional):
