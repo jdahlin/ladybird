@@ -204,7 +204,10 @@ def _generate_to_dictionary(generator, type_, interface: Interface) -> None:
             mg.append("\n    @cpp_name@.@member_name@ = @member_value_name@;\n")
             if not member.required and member.default_value is None:
                 mg.append("\n    }\n")
-            _DICTIONARY_INDEX[0] = i + 1
+            # Advance counter by 1 (matches C++'s trailing `i++;` — the counter
+            # may have been moved by the recursive generate_to_cpp call above,
+            # and we still want exactly one additional bump per member).
+            _DICTIONARY_INDEX[0] += 1
         if not dictionary.parent_name:
             break
         if dictionary.parent_name not in interface.dictionaries:
