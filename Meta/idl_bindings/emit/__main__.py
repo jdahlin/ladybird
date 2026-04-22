@@ -75,9 +75,14 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = args.output_path
 
     header = generate_header(interface)
-    impl = generate_implementation(interface)
-
     _write_if_changed(output_dir / f"{basename}.h", header)
+    try:
+        impl = generate_implementation(interface)
+    except NotImplementedError:
+        # Concept-ladder is still climbing — emit only the .h until the .cpp
+        # path lands. The parity script will surface the missing file as a
+        # "(only in C++)" diff.
+        return 0
     _write_if_changed(output_dir / f"{basename}.cpp", impl)
 
     return 0

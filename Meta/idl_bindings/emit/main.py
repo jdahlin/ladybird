@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from ..ast import Interface
 from .constructor import generate_constructor_header
+from .constructor import generate_constructor_implementation
+from .prologue import generate_implementation_prologue
 from .prototype import generate_prototype_header
+from .prototype import generate_prototype_implementation
 from .source_generator import SourceGenerator
 from .source_generator import StringBuilder
 
@@ -56,4 +59,27 @@ def generate_header(interface: Interface) -> str:
 
 
 def generate_implementation(interface: Interface) -> str:
-    raise NotImplementedError("generate_implementation is not yet implemented (concept-ladder rungs in progress)")
+    builder = StringBuilder()
+    g = SourceGenerator(builder)
+
+    generate_implementation_prologue(interface, g)
+
+    if interface.is_namespace:
+        # generate_namespace_implementation — concept-ladder rung 40.
+        raise NotImplementedError("namespace_implementation is not yet implemented")
+    else:
+        generate_constructor_implementation(interface, g)
+        generate_prototype_implementation(interface, g)
+
+    if interface.pair_iterator_types is not None:
+        raise NotImplementedError("iterator_prototype_implementation is not yet implemented")
+
+    if interface.async_value_iterator_type is not None:
+        raise NotImplementedError("async_iterator_prototype_implementation is not yet implemented")
+
+    if "Global" in interface.extended_attributes:
+        raise NotImplementedError("global_mixin_implementation is not yet implemented")
+
+    # IDLGenerators.cpp:6249-6251 — common epilogue.
+    g.append("\n} // namespace Web::Bindings\n")
+    return builder.to_string()

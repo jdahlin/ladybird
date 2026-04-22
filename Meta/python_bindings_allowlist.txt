@@ -1,0 +1,2 @@
+# Files whose Python-generated bindings are byte-identical to the C++ tool's output.
+HTML/WorkletGlobalScope.idl
