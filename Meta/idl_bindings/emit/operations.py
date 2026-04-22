@@ -28,8 +28,6 @@ def generate_function(
     static: bool,
     generator: SourceGenerator,
 ) -> None:
-    if function.return_type and function.return_type.name == "Promise":
-        raise NotImplementedError("Promise-returning operations not yet supported")
     if "CEReactions" in function.extended_attributes:
         raise NotImplementedError("[CEReactions] operations not yet supported")
     if static:
@@ -61,6 +59,14 @@ def generate_function(
         "    [[maybe_unused]] auto& realm = *vm.current_realm();\n"
     )
 
+    is_promise = function.return_type is not None and function.return_type.name == "Promise"
+    if is_promise:
+        g.append(
+            "\n"
+            "    auto steps = [&realm, &vm]() -> JS::ThrowCompletionOr<GC::Ref<WebIDL::Promise>> {\n"
+            "        (void)realm;\n"
+        )
+
     # impl_from for non-static (IDLGenerators.cpp:2417-2421).
     g.append("\n    auto* impl = TRY(impl_from(vm));\n")
 
@@ -78,6 +84,24 @@ def generate_function(
         "\n"
         "    [[maybe_unused]] auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@function.cpp_name@(@.arguments@); }));\n"
     )
+
+    if is_promise:
+        g.append(
+            "\n"
+            "        return retval;\n"
+            "    };\n"
+            "\n"
+            "    auto maybe_retval = steps();\n"
+            "\n"
+            "    // And then, if an exception E was thrown:\n"
+            "    // 1. If op has a return type that is a promise type, then return ! Call(%Promise.reject%, %Promise%, «E»).\n"
+            "    // 2. Otherwise, end these steps and allow the exception to propagate.\n"
+            "    // NOTE: We know that this is a Promise return type statically by the IDL.\n"
+            "    if (maybe_retval.is_throw_completion())\n"
+            "        return WebIDL::create_rejected_promise(realm, maybe_retval.error_value())->promise();\n"
+            "\n"
+            "    auto retval = maybe_retval.release_value();\n"
+        )
 
     # IDLGenerators.cpp:2496 — return statement.
     from .types import generate_wrap_statement

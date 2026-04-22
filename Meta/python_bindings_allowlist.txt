@@ -115,10 +115,11 @@ HTML/WindowLocalStorage.idl
 HTML/WindowSessionStorage.idl
 HTML/WorkletGlobalScope.idl
 IndexedDB/IDBCursorWithValue.idl
-IndexedDB/IDBIndex.idl
+IndexedDB/IDBFactory.idl
 IndexedDB/IDBOpenDBRequest.idl
 IndexedDB/IDBRecord.idl
 IndexedDB/IDBVersionChangeEvent.idl
+Internals/FakeXRDevice.idl
 Internals/InternalAnimationTimeline.idl
 Internals/WebUI.idl
 MediaCapture/MediaStreamConstraints.idl
@@ -194,6 +195,7 @@ WebAudio/DelayNode.idl
 WebAudio/DynamicsCompressorNode.idl
 WebAudio/GainNode.idl
 WebAudio/OfflineAudioCompletionEvent.idl
+WebAudio/OscillatorNode.idl
 WebAudio/ScriptProcessorNode.idl
 WebAudio/StereoPannerNode.idl
 WebGL/Extensions/ANGLEInstancedArrays.idl
@@ -234,6 +236,7 @@ WebVTT/VTTRegion.idl
 WebXR/XRLayer.idl
 WebXR/XRRenderState.idl
 WebXR/XRSessionEvent.idl
+WebXR/XRSession.idl
 XHR/ProgressEvent.idl
 XHR/XMLHttpRequestEventTarget.idl
 XHR/XMLHttpRequestUpload.idl

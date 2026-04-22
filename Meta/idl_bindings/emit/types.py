@@ -202,6 +202,18 @@ def generate_wrap_statement(
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
+    if type_.name == "Promise":
+        # IDLGenerators.cpp:2186-2189.
+        g.append("\n    @result_expression@ GC::Ref { as<JS::Promise>(*@value_non_optional@->promise()) };\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
+    if type_.kind == "plain" and type_.name in ("ArrayBufferView", "BufferSource"):
+        # IDLGenerators.cpp:2190-2193.
+        g.append("\n    @result_expression@ JS::Value(@value_non_optional@->raw_object());\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
     if type_.kind == "plain":
         g.append("\n    @result_expression@ &const_cast<@type@&>(*@value_non_optional@);\n")
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
