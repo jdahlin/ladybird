@@ -186,6 +186,7 @@ WebAudio/AudioBuffer.idl
 WebAudio/AudioBufferSourceNode.idl
 WebAudio/AudioDestinationNode.idl
 WebAudio/AudioListener.idl
+WebAudio/AudioParam.idl
 WebAudio/AudioScheduledSourceNode.idl
 WebAudio/BiquadFilterNode.idl
 WebAudio/ChannelMergerNode.idl
@@ -209,6 +210,7 @@ WebGL/Extensions/OESStandardDerivatives.idl
 WebGL/Extensions/OESVertexArrayObject.idl
 WebGL/Extensions/WebGLCompressedTextureS3tc.idl
 WebGL/Extensions/WebGLCompressedTextureS3tcSrgb.idl
+WebGL/Extensions/WebGLDrawBuffers.idl
 WebGL/Extensions/WebGLVertexArrayObjectOES.idl
 WebGL/Types.idl
 WebGL/WebGL2RenderingContextOverloads.idl

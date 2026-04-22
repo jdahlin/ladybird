@@ -115,6 +115,19 @@ def generate_to_cpp(
     if type_.kind == "plain" and type_.name in interface.callback_functions:
         _generate_to_callback_function(g, type_, interface, optional=optional)
         return
+    if type_.kind == "parameterized" and type_.name in ("sequence", "FrozenArray"):
+        _generate_to_sequence(
+            g,
+            type_,
+            js_name,
+            js_suffix,
+            accept_cpp,
+            interface,
+            optional=optional,
+            optional_default_value=optional_default_value,
+            recursion_depth=recursion_depth,
+        )
+        return
     callback_iface = _find_callback_interface(interface, type_.name)
     if callback_iface is not None:
         _generate_to_callback_interface(g, type_, callback_iface)
@@ -664,3 +677,178 @@ def _generate_to_buffer_source(g, type_, *, optional) -> None:
         g.append("\n@buffer_source.indent@}\n")
     if optional:
         g.append("\n    }\n")
+
+
+_INTEGER_TO_VECTOR_TYPE = {
+    "byte": "WebIDL::Byte",
+    "octet": "WebIDL::Octet",
+    "short": "WebIDL::Short",
+    "unsigned short": "WebIDL::UnsignedShort",
+    "long": "WebIDL::Long",
+    "unsigned long": "WebIDL::UnsignedLong",
+    "long long": "WebIDL::LongLong",
+    "unsigned long long": "WebIDL::UnsignedLongLong",
+}
+
+
+# (cpp_type_name, sequence_storage_type) — Vector or RootVector.
+def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
+    """Port of idl_type_name_to_cpp_type (IDLGenerators.cpp:291-...).
+
+    Returns (cpp_type_name, "Vector"|"RootVector").
+    """
+    # Platform objects (interfaces): T → GC::Root<T>.
+    if (
+        t.kind == "plain"
+        and t.name
+        not in (
+            "any",
+            "undefined",
+            "object",
+            "boolean",
+            "float",
+            "double",
+            "unrestricted float",
+            "unrestricted double",
+            "bigint",
+            "DOMString",
+            "ByteString",
+            "USVString",
+            "Utf16DOMString",
+            "Utf16USVString",
+            "CSSOMString",
+            "Promise",
+            "ArrayBufferView",
+            "BufferSource",
+        )
+        and t.name not in _INTEGER_TO_VECTOR_TYPE
+    ):
+        if _is_js_builtin_buffer_type(t.name):
+            return (f"GC::Root<JS::{t.name}>", "RootVector")
+        if t.name in interface.callback_functions:
+            return ("GC::Root<WebIDL::CallbackType>", "RootVector")
+        cb_iface = _find_callback_interface(interface, t.name)
+        if cb_iface is not None:
+            return (f"GC::Root<{cb_iface.implemented_name}>", "RootVector")
+        if t.name in interface.enumerations:
+            return (t.name, "Vector")
+        if t.name in interface.dictionaries:
+            return (t.name, "Vector")
+        # Platform object.
+        return (f"GC::Root<{t.name}>", "RootVector")
+    if is_string(t):
+        if "Utf16" in t.name:
+            return ("Utf16String", "Vector")
+        return ("String", "Vector")
+    if t.name in ("double", "unrestricted double") and not t.nullable:
+        return ("double", "Vector")
+    if t.name in ("float", "unrestricted float") and not t.nullable:
+        return ("float", "Vector")
+    if t.name == "boolean" and not t.nullable:
+        return ("bool", "Vector")
+    if t.name in _INTEGER_TO_VECTOR_TYPE and not t.nullable:
+        return (_INTEGER_TO_VECTOR_TYPE[t.name], "Vector")
+    if t.name == "any":
+        return ("JS::Value", "RootVector")
+    raise NotImplementedError(f"idl_type_name_to_cpp_type for {t.name!r}")
+
+
+def _generate_to_sequence(
+    g, type_, js_name, js_suffix, cpp_name, interface, *, optional, optional_default_value, recursion_depth
+) -> None:
+    """Port of generate_sequence_to_cpp + generate_sequence_from_iterable
+    (IDLGenerators.cpp:1222-1292 + 1953-2006).
+    """
+    elem_type = type_.parameters[0]
+    elem_cpp_name, storage = _idl_type_name_to_cpp_type(elem_type, interface)
+    g.set("recursion_depth", str(recursion_depth))
+    g.set("sequence.type", elem_cpp_name)
+    g.set("sequence.storage_type", storage)
+
+    if optional or type_.nullable:
+        if optional_default_value is None:
+            g.append("\n    Optional<@sequence.storage_type@<@sequence.type@>> @cpp_name@;\n")
+        else:
+            if optional_default_value != "[]":
+                raise NotImplementedError(f"sequence default {optional_default_value!r}")
+            if storage == "Vector":
+                g.append("\n    @sequence.storage_type@<@sequence.type@> @cpp_name@;\n")
+            else:
+                g.append("\n    @sequence.storage_type@<@sequence.type@> @cpp_name@ { vm.heap() };\n")
+        if optional:
+            g.append("\n    if (!@js_name@@js_suffix@.is_undefined()) {\n")
+        else:
+            g.append("\n    if (!@js_name@@js_suffix@.is_nullish()) {\n")
+
+    g.append(
+        "\n"
+        "    if (!@js_name@@js_suffix@.is_object())\n"
+        "        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
+        "\n"
+        "    auto @js_name@@js_suffix@_iterator_method@recursion_depth@ = TRY(@js_name@@js_suffix@.get_method(vm, vm.well_known_symbol_iterator()));\n"
+        "    if (!@js_name@@js_suffix@_iterator_method@recursion_depth@)\n"
+        "        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotIterable, @js_name@@js_suffix@);\n"
+    )
+
+    inner_cpp_name = f"{cpp_name}_non_optional" if (optional or type_.nullable) else cpp_name
+    iterable_name = f"{js_name}{js_suffix}"
+    iterator_method_name = f"{js_name}{js_suffix}_iterator_method{recursion_depth}"
+    _generate_sequence_from_iterable(
+        g,
+        type_,
+        inner_cpp_name,
+        iterable_name,
+        iterator_method_name,
+        interface,
+        recursion_depth + 1,
+        elem_cpp_name,
+        storage,
+    )
+
+    if optional or type_.nullable:
+        g.append("\n        @cpp_name@ = move(@cpp_name@_non_optional);\n    }\n")
+
+
+def _generate_sequence_from_iterable(
+    g, type_, cpp_name, iterable_name, iterator_method_name, interface, recursion_depth, elem_cpp_name, storage
+):
+    g.set("cpp_name", cpp_name)
+    g.set("iterable_cpp_name", iterable_name)
+    g.set("iterator_method_cpp_name", iterator_method_name)
+    g.set("recursion_depth", str(recursion_depth))
+    g.set("sequence.type", elem_cpp_name)
+    g.set("sequence.storage_type", storage)
+
+    g.append(
+        "\n"
+        "    auto @iterable_cpp_name@_iterator@recursion_depth@ = TRY(JS::get_iterator_from_method(vm, @iterable_cpp_name@, *@iterator_method_cpp_name@));\n"
+    )
+    if storage == "Vector":
+        g.append("\n    @sequence.storage_type@<@sequence.type@> @cpp_name@;\n")
+    else:
+        g.append("\n    @sequence.storage_type@<@sequence.type@> @cpp_name@ { vm.heap() };\n")
+    g.append(
+        "\n"
+        "    for (;;) {\n"
+        "        auto next@recursion_depth@ = TRY(JS::iterator_step(vm, @iterable_cpp_name@_iterator@recursion_depth@));\n"
+        "        if (!next@recursion_depth@.has<JS::IterationResult>())\n"
+        "            break;\n"
+        "\n"
+        "        auto next_item@recursion_depth@ = TRY(next@recursion_depth@.get<JS::IterationResult>().value);\n"
+    )
+    # Coerce element. C++ uses parameter with empty extended_attributes, name=iterable_name.
+    from ..ast import Parameter as _P
+
+    element_param = _P(name=iterable_name, type=type_.parameters[0], extended_attributes={})
+    generate_to_cpp(
+        element_param,
+        "next_item",
+        str(recursion_depth),
+        f"sequence_item{recursion_depth}",
+        interface,
+        g,
+        optional=False,
+        variadic=False,
+        recursion_depth=recursion_depth,
+    )
+    g.append("\n    @cpp_name@.append(sequence_item@recursion_depth@);\n    }\n")
