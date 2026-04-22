@@ -89,7 +89,19 @@ def generate_to_cpp(
         _generate_to_object(g, type_, optional=optional)
         return
     if is_enum(type_, interface):
-        _generate_to_enum(g, type_, interface, optional=optional, optional_default_value=optional_default_value)
+        # Attribute setters return undefined instead of throwing on invalid
+        # enum values (IDLGenerators.cpp:1872-1876).
+        from ..ast import Attribute as _Attr
+
+        throw_on_invalid = not isinstance(parameter, _Attr)
+        _generate_to_enum(
+            g,
+            type_,
+            interface,
+            optional=optional,
+            optional_default_value=optional_default_value,
+            throw_on_invalid=throw_on_invalid,
+        )
         return
     if type_.kind == "plain" and type_.name in interface.dictionaries:
         _generate_to_dictionary(g, type_, interface)
@@ -405,28 +417,43 @@ def _generate_to_object(g, type_, *, optional):
         )
 
 
-def _generate_to_enum(g, type_, interface: Interface, *, optional, optional_default_value):
-    """Port of generate_enum_to_cpp."""
+def _generate_to_enum(g, type_, interface: Interface, *, optional, optional_default_value, throw_on_invalid=True):
+    """Port of generate_enum_to_cpp (IDLGenerators.cpp:1054-1112)."""
     enum = interface.enumerations[type_.name]
-    g.set("enum.type.name", type_.name)
-    g.set("enum.first_member", enum.translated_cpp_names[enum.first_member])
-    if optional and optional_default_value is None and not type_.nullable:
-        g.append("\n    Optional<@parameter.type.name@> @cpp_name@;\n")
+    if optional_default_value is not None:
+        default_name = optional_default_value
+        if default_name.startswith('"') and default_name.endswith('"'):
+            default_name = default_name[1:-1]
     else:
-        g.append("\n    @parameter.type.name@ @cpp_name@ { @parameter.type.name@::@enum.first_member@ };\n")
-    g.append("\n    {\n")
-    g.append("        auto string = TRY(@js_name@@js_suffix@.to_string(vm));\n")
-    first = True
-    for value, cpp in enum.translated_cpp_names.items():
-        prefix = "if" if first else "else if"
-        first = False
-        g.append(f'        {prefix} (string == "{value}"sv)\n')
-        g.append(f"            @cpp_name@ = @parameter.type.name@::{cpp};\n")
-    g.append("        else\n")
+        default_name = enum.first_member
+    g.set("enum.default.cpp_value", enum.translated_cpp_names[default_name])
+    g.set("js_name.as_string", f"{g.get('js_name')}{g.get('js_suffix')}_string")
     g.append(
-        '            return vm.throw_completion<JS::TypeError>(JS::ErrorType::InvalidEnumerationValue, string, "@parameter.type.name@");\n'
+        "\n    @parameter.type.name.normalized@ @cpp_name@ { @parameter.type.name.normalized@::@enum.default.cpp_value@ };\n"
     )
-    g.append("    }\n")
+    if optional:
+        g.append("\n    if (!@js_name@@js_suffix@.is_undefined()) {\n")
+    g.append("\n    auto @js_name.as_string@ = TRY(@js_name@@js_suffix@.to_string(vm));\n")
+    first = True
+    for name, cpp_value in enum.translated_cpp_names.items():
+        else_prefix = "" if first else "else "
+        first = False
+        g.set("enum.alt.name", name)
+        g.set("enum.alt.value", cpp_value)
+        g.set("else", else_prefix)
+        g.append(
+            '\n    @else@if (@js_name.as_string@ == "@enum.alt.name@"sv)\n'
+            "        @cpp_name@ = @parameter.type.name.normalized@::@enum.alt.value@;\n"
+        )
+    if throw_on_invalid:
+        g.append(
+            "\n    else\n"
+            '        return vm.throw_completion<JS::TypeError>(JS::ErrorType::InvalidEnumerationValue, @js_name.as_string@, "@parameter.type.name@");\n'
+        )
+    else:
+        g.append("\n    else\n        return JS::js_undefined();\n")
+    if optional:
+        g.append("\n    }\n")
 
 
 def _generate_to_platform_object(g, type_, *, optional):
@@ -438,24 +465,38 @@ def _generate_to_platform_object(g, type_, *, optional):
     the surrounding interface is in the same C++ namespace as the parameter.
     We use the same shape but allow the type to differ via @cpp_type@.
     """
-    g.set("cpp_type", _cpp_type_name(type_))
-    if optional or type_.nullable:
-        g.append(
-            "\n"
-            "    @cpp_type@* @cpp_name@ = nullptr;\n"
-            "    if (!@js_name@@js_suffix@.is_nullish()) {\n"
-            "        if (!@js_name@@js_suffix@.is_object() || !is<@cpp_type@>(@js_name@@js_suffix@.as_object()))\n"
-            '            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
-            "        @cpp_name@ = &as<@cpp_type@>(@js_name@@js_suffix@.as_object());\n"
-            "    }\n"
-        )
+    # IDLGenerators.cpp:787-822. Use @parameter.type.name.normalized@ (already
+    # set on the generator by generate_to_cpp) rather than @cpp_type@.
+    if not type_.nullable:
+        if not optional:
+            g.append(
+                "\n"
+                "    if (!@js_name@@js_suffix@.is_object() || !is<@parameter.type.name.normalized@>(@js_name@@js_suffix@.as_object()))\n"
+                '        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
+                "\n"
+                "    auto& @cpp_name@ = static_cast<@parameter.type.name.normalized@&>(@js_name@@js_suffix@.as_object());\n"
+            )
+        else:
+            g.append(
+                "\n"
+                "    GC::Ptr<@parameter.type.name.normalized@> @cpp_name@;\n"
+                "    if (!@js_name@@js_suffix@.is_undefined()) {\n"
+                "        if (!@js_name@@js_suffix@.is_object() || !is<@parameter.type.name.normalized@>(@js_name@@js_suffix@.as_object()))\n"
+                '            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
+                "\n"
+                "        @cpp_name@ = static_cast<@parameter.type.name.normalized@&>(@js_name@@js_suffix@.as_object());\n"
+                "    }\n"
+            )
     else:
+        g.append("\n    GC::Ptr<@parameter.type.name.normalized@> @cpp_name@;\n")
         g.append(
             "\n"
-            "    if (!@js_name@@js_suffix@.is_object() || !is<@cpp_type@>(@js_name@@js_suffix@.as_object()))\n"
-            '        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
+            "    if (!@js_name@@js_suffix@.is_nullish()) {\n"
+            "        if (!@js_name@@js_suffix@.is_object() || !is<@parameter.type.name.normalized@>(@js_name@@js_suffix@.as_object()))\n"
+            '            return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
             "\n"
-            "    auto& @cpp_name@ = as<@cpp_type@>(@js_name@@js_suffix@.as_object());\n"
+            "        @cpp_name@ = &static_cast<@parameter.type.name.normalized@&>(@js_name@@js_suffix@.as_object());\n"
+            "    }\n"
         )
 
 
@@ -471,21 +512,15 @@ def generate_arguments(parameters, interface: Interface, generator: SourceGenera
         cpp_name = _make_input_acceptable_cpp(_to_snake(parameter.name))
         if parameter.variadic:
             names.append(f"move({cpp_name})")
-        elif (
-            parameter.optional
-            and parameter.default_value is None
-            and not (parameter.type and parameter.type.name in ("any",))
-        ):
-            names.append(f"move({cpp_name})")
         else:
             names.append(cpp_name)
-        ag = generator.fork()
-        ag.append(f"\n    auto arg{index} = vm.argument({index});\n")
+            ag = generator.fork()
+            ag.append(f"\n    auto arg{index} = vm.argument({index});\n")
         generate_to_cpp(
             parameter,
-            f"arg{index}",
-            "",
-            cpp_name,
+            "arg",
+            str(index),
+            _to_snake(parameter.name),
             interface,
             generator,
             optional=parameter.optional,

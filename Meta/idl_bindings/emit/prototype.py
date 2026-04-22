@@ -779,4 +779,4 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
         "\n    TRY(throw_dom_exception_if_needed(vm, [&] { return impl->set_@attribute.cpp_name@(cpp_value); }));\n"
     )
 
-    g.append("    return JS::js_undefined();\n}\n")
+    g.append("\n    return JS::js_undefined();\n}\n")

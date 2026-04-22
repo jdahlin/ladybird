@@ -99,56 +99,123 @@ def generate_wrap_statement(
         g.append("\n    @result_expression@ JS::js_undefined();\n")
         return
 
+    uses_value_access = is_optional and (
+        type_.kind == "union"
+        or is_string(type_)
+        or type_.name in ("sequence", "FrozenArray")
+        or is_primitive(type_)
+        or type_.name in interface.enumerations
+        or type_.name in interface.dictionaries
+    )
+    g.set("value_non_optional", f"{value}.value()" if uses_value_access else value)
+    g.set("type", _cpp_type_name(type_))
+
+    # Compound wrap: if nullable or optional (except union), open an
+    # `if (value.has_value())` / `if (value)` block. IDLGenerators.cpp:2042-2069.
+    wrap_in_if = False
     if (is_optional or type_.nullable) and type_.kind != "union":
-        # Nullable / optional primitive wrap: opens an `if (value.has_value())`
-        # then emits the wrap and closes with `} else { result = undefined; }`.
-        # Below we handle only the non-optional / non-nullable case for
-        # primitives, which covers all constant declarations we care about.
-        raise NotImplementedError(f"nullable/optional wrap for {type_.name!r} is not yet supported")
+        if (
+            is_string(type_)
+            or type_.name in ("sequence", "FrozenArray")
+            or is_primitive(type_)
+            or type_.name in interface.enumerations
+            or type_.name in interface.dictionaries
+        ):
+            g.append("\n    if (@value@.has_value()) {\n")
+        else:
+            g.append("\n    if (@value@) {\n")
+        wrap_in_if = True
+    if is_optional and type_.kind == "union":
+        g.append("\n    if (@value@.has_value()) {\n")
+        wrap_in_if = True
 
     if is_boolean(type_) or is_floating_point(type_):
-        # IDLGenerators.cpp:2166-2179 — non-nullable, non-optional path.
-        g.append("\n    @result_expression@ JS::Value(@value@);\n")
+        # IDLGenerators.cpp:2166-2179.
+        if type_.nullable:
+            g.append("\n    @result_expression@ JS::Value(@value@.release_value());\n")
+        elif is_optional:
+            g.append("\n    @result_expression@ JS::Value(@value_non_optional@);\n")
+        else:
+            g.append("\n    @result_expression@ JS::Value(@value@);\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
     if is_integer(type_):
         # IDLGenerators.cpp:2180-2181 → generate_from_integral.
         g.set("cpp_type", _IDL_INTEGER_TO_CPP_WRAP[type_.name])
-        g.append("\n    @result_expression@ JS::Value(static_cast<@cpp_type@>(@value@));\n")
+        if type_.nullable or is_optional:
+            g.append("\n    @result_expression@ JS::Value(static_cast<@cpp_type@>(@value@.value()));\n")
+        else:
+            g.append("\n    @result_expression@ JS::Value(static_cast<@cpp_type@>(@value@));\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
     if is_string(type_):
-        # IDLGenerators.cpp:2071-2083 — non-nullable, non-optional path.
-        g.append("\n    @result_expression@ JS::PrimitiveString::create(vm, @value@);\n")
+        # IDLGenerators.cpp:2071-2083.
+        if type_.nullable or is_optional:
+            g.append(
+                "\n    @result_expression@ JS::PrimitiveString::create(vm, const_cast<decltype(@value@)&>(@value@).release_value());\n"
+            )
+        else:
+            g.append("\n    @result_expression@ JS::PrimitiveString::create(vm, @value@);\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
     if is_enum(type_, interface):
-        # IDLGenerators.cpp:2298-2305 — enum-typed values are wrapped via
-        # idl_enum_to_string from Bindings:: into a JS::PrimitiveString.
-        g.append("\n    @result_expression@ JS::PrimitiveString::create(vm, Bindings::idl_enum_to_string(@value@));\n")
+        g.append(
+            "\n    @result_expression@ JS::PrimitiveString::create(vm, Bindings::idl_enum_to_string(@value_non_optional@));\n"
+        )
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
     if type_.kind == "plain" and type_.name in ("Location", "Uint8Array", "Uint8ClampedArray", "any"):
         # IDLGenerators.cpp:2182-2185 — these all just pass through.
-        g.append("\n    @result_expression@ @value@;\n")
+        g.append("\n    @result_expression@ @value_non_optional@;\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
+    if type_.kind == "plain" and type_.name in interface.callback_functions:
+        # IDLGenerators.cpp:2249-2268.
+        callback = interface.callback_functions[type_.name]
+        if callback.is_legacy_treat_non_object_as_null and not type_.nullable:
+            g.append(
+                "\n"
+                "  if (!@value_non_optional@) {\n"
+                "      @result_expression@ JS::js_null();\n"
+                "  } else {\n"
+                "      @result_expression@ @value_non_optional@->callback;\n"
+                "  }\n"
+            )
+        else:
+            g.append("\n  @result_expression@ @value_non_optional@->callback;\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
     if type_.kind == "plain" and type_.name == "object":
         # IDLGenerators.cpp:2337-2340.
-        g.append("\n    @result_expression@ JS::Value(const_cast<JS::Object*>(@value@));\n")
+        g.append("\n    @result_expression@ JS::Value(const_cast<JS::Object*>(@value_non_optional@));\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
     if type_.kind == "plain":
-        # IDLGenerators.cpp:2341-2345 — catch-all interface (platform-object)
-        # branch. The C++ side computes `cpp_type_name` for libweb namespaces
-        # (`Foo::Foo`) and JS builtin buffers (`JS::Foo`); for everything else
-        # it's just the name. We only handle the simple case here; the others
-        # arrive at later rungs.
-        g.set("type", _cpp_type_name(type_))
-        g.append("\n    @result_expression@ &const_cast<@type@&>(*@value@);\n")
+        g.append("\n    @result_expression@ &const_cast<@type@&>(*@value_non_optional@);\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
     raise NotImplementedError(f"wrap statement for type {type_.name!r} (kind={type_.kind}) not supported yet")
+
+
+def _close_wrap_if(g, type_, is_optional, wrap_in_if) -> None:
+    """Mirror IDLGenerators.cpp:2347-2358 — the closer for the nullable/optional
+    wrap block. For nullable non-union types, emit `} else { result = null; }`.
+    For optional (any type), emit just `}`.
+    """
+    if not wrap_in_if:
+        return
+    if type_.nullable and type_.kind != "union":
+        g.append("\n    } else {\n        @result_expression@ JS::js_null();\n    }\n")
+    elif is_optional:
+        g.append("\n    }\n")
 
 
 def _cpp_type_name(type_: Type) -> str:
