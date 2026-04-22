@@ -363,8 +363,12 @@ def resolve_typedefs(interface: Interface) -> None:
         if attrs is not None:
             for k, v in td.extended_attributes.items():
                 attrs.setdefault(k, v)
-        # Recursively resolve in case the typedef points to another typedef.
-        new_type = _shallow_copy_type(td.type)
+        # Mirror IDLParser.cpp:1213-1214 — share the typedef's stored Type
+        # instance and overwrite its nullable flag in place. This is how the
+        # C++ side behaves (NonnullRefPtr<Type const> with const_cast); the
+        # last use-site to resolve a given typedef wins for the nullable bit
+        # on the shared instance, which downstream codegen reads when wrapping.
+        new_type = td.type
         new_type.nullable = nullable
         new_type = resolve_type(new_type, attrs)
         return new_type

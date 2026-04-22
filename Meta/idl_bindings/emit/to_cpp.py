@@ -1230,7 +1230,6 @@ def _generate_to_union(
         str_param = Parameter(
             type=string_type,
             name=parameter.name,
-            optional_default_value=None,
             extended_attributes=parameter.extended_attributes,
         )
         generate_to_cpp(

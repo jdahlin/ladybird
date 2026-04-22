@@ -224,22 +224,23 @@ def _to_snakecase(s: str) -> str:
     a run, so "URLSearchParams" → "url_search_params" and "HTMLElement"
     → "html_element".
     """
+    # Mirror AK::StringUtils::to_snakecase (StringUtils.cpp:306-330) exactly.
     if not s:
         return s
     out: list[str] = []
     for i, ch in enumerate(s):
-        if ch.isupper():
-            # Insert underscore if previous char is lowercase, or if the
-            # next char is lowercase (mid-run boundary like "URLSearch" →
-            # "url_search").
-            if i > 0:
-                prev = s[i - 1]
-                nxt = s[i + 1] if i + 1 < len(s) else ""
-                if prev.islower() or (nxt.islower() and prev.isupper()):
-                    out.append("_")
-            out.append(ch.lower())
-        else:
-            out.append(ch)
+        insert = False
+        if i > 0:
+            prev = s[i - 1]
+            if prev.isascii() and prev.islower() and prev.isalpha() and ch.isascii() and ch.isupper() and ch.isalpha():
+                insert = True
+            elif i < len(s) - 1:
+                nxt = s[i + 1]
+                if ch.isascii() and ch.isupper() and ch.isalpha() and nxt.isascii() and nxt.islower() and nxt.isalpha():
+                    insert = True
+        if insert:
+            out.append("_")
+        out.append(ch.lower())
     return "".join(out)
 
 
