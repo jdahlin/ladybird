@@ -304,19 +304,131 @@ def generate_prototype_implementation(interface: Interface, generator: SourceGen
     # body is the simplest possible.
     _generate_prototype_or_global_mixin_initialization(interface, g, generate_unforgeables=False)
     _generate_prototype_or_global_mixin_initialization(interface, g, generate_unforgeables=True)
-    # generate_prototype_or_global_mixin_definitions emits per-attribute /
-    # per-operation bodies — none for an empty interface.
-    if (
+    # IDLGenerators.cpp:5911 calls generate_prototype_or_global_mixin_definitions.
+    _generate_prototype_or_global_mixin_definitions(interface, g)
+
+
+def _generate_prototype_or_global_mixin_definitions(interface: Interface, generator: SourceGenerator) -> None:
+    """Port of generate_prototype_or_global_mixin_definitions
+    (IDLGenerators.cpp:4408-...).
+
+    Currently emits only the per-attribute getter (and a not-yet-supported
+    raise for setters and operations). Subsequent rungs add operation
+    bodies, attribute setters, stringifier, iterators, setlike/maplike,
+    named/indexed property handlers.
+    """
+    if interface.has_stringifier:
+        raise NotImplementedError("stringifier definitions are not yet supported")
+    if interface.named_property_getter is not None:
+        raise NotImplementedError("named property getter definitions are not yet supported")
+    if interface.named_property_setter is not None:
+        raise NotImplementedError("named property setter definitions are not yet supported")
+    if interface.named_property_deleter is not None:
+        raise NotImplementedError("named property deleter definitions are not yet supported")
+    if interface.indexed_property_getter is not None:
+        raise NotImplementedError("indexed property getter definitions are not yet supported")
+    if interface.indexed_property_setter is not None:
+        raise NotImplementedError("indexed property setter definitions are not yet supported")
+    if interface.pair_iterator_types is not None:
+        raise NotImplementedError("pair iterator definitions are not yet supported")
+    if interface.async_value_iterator_type is not None:
+        raise NotImplementedError("async iterator definitions are not yet supported")
+    if interface.set_entry_type is not None:
+        raise NotImplementedError("setlike definitions are not yet supported")
+    if interface.map_key_type is not None:
+        raise NotImplementedError("maplike definitions are not yet supported")
+    if interface.operations:
+        raise NotImplementedError("operation definitions are not yet supported")
+
+    is_global_interface = "Global" in interface.extended_attributes
+    class_name = interface.global_mixin_class if is_global_interface else interface.prototype_class
+
+    # IDLGenerators.cpp:4429-4456 — impl_from helpers, emitted only when the
+    # interface has at least one member that needs `impl_from`.
+    needs_impl_from = bool(
         interface.attributes
         or interface.operations
         or interface.has_stringifier
-        or interface.named_property_getter
-        or interface.named_property_setter
-        or interface.named_property_deleter
-        or interface.indexed_property_getter
-        or interface.indexed_property_setter
-    ):
-        raise NotImplementedError("prototype member definitions are not yet supported on this rung")
+        or interface.set_entry_type is not None
+        or interface.map_key_type is not None
+    )
+    if needs_impl_from:
+        ig = generator.fork()
+        ig.set("fully_qualified_name", interface.fully_qualified_name)
+        ig.set("namespaced_name", interface.namespaced_name)
+        ig.append(
+            "\n"
+            "[[maybe_unused]] static JS::ThrowCompletionOr<@fully_qualified_name@*> impl_from(JS::VM& vm, JS::Value js_value)\n"
+            "{\n"
+        )
+        if interface.name in ("EventTarget", "Window"):
+            ig.append(
+                "\n"
+                "    if (auto window_proxy = js_value.as_if<HTML::WindowProxy>())\n"
+                "        return window_proxy->window().ptr();\n"
+            )
+        ig.append(
+            "\n"
+            "    if (auto impl = js_value.as_if<@fully_qualified_name@>())\n"
+            "        return impl.ptr();\n"
+            '    return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@namespaced_name@");\n'
+            "}\n"
+            "\n"
+            "[[maybe_unused]] static JS::ThrowCompletionOr<@fully_qualified_name@*> impl_from(JS::VM& vm)\n"
+            "{\n"
+            "    auto this_value = vm.this_value();\n"
+            "    if (this_value.is_nullish())\n"
+            "        this_value = &vm.current_realm()->global_object();\n"
+            "    return impl_from(vm, this_value);\n"
+            "}\n"
+            "\n"
+        )
+
+    for attribute in interface.attributes:
+        if "FIXME" in attribute.extended_attributes:
+            # FIXME-marked attributes are already handled in the init body
+            # via the Unimplemented placeholder; no body needed.
+            continue
+        _generate_attribute_getter(attribute, interface, class_name, generator)
+        # Attribute setters add another emit; this rung only handles readonly.
+        if not attribute.readonly or any(
+            k in attribute.extended_attributes for k in ("Replaceable", "PutForwards", "LegacyLenientSetter")
+        ):
+            raise NotImplementedError("attribute setter definitions are not yet supported on this rung")
+
+
+def _generate_attribute_getter(attribute, interface: Interface, class_name: str, generator: SourceGenerator) -> None:
+    """Port of the simple-getter slice of generate_prototype_or_global_mixin_definitions
+    (IDLGenerators.cpp:4493-4856 — the non-Reflect, non-Promise, non-Cached path).
+    """
+    from .types import attribute_callback_basename
+    from .types import attribute_cpp_name
+    from .types import generate_wrap_statement
+
+    if attribute.extended_attributes.keys() & {"Reflect", "CachedAttribute"}:
+        raise NotImplementedError(f"[Reflect]/[CachedAttribute] attribute body not yet supported ({attribute.name})")
+    if attribute.type and attribute.type.name == "Promise":
+        raise NotImplementedError(f"Promise-typed attribute body not yet supported ({attribute.name})")
+
+    g = generator.fork()
+    g.set("class_name", class_name)
+    g.set("attribute.getter_callback", f"{attribute_callback_basename(attribute)}_getter")
+    g.set("attribute.cpp_name", attribute_cpp_name(attribute))
+
+    g.append(
+        "\n"
+        "JS_DEFINE_NATIVE_FUNCTION(@class_name@::@attribute.getter_callback@)\n"
+        "{\n"
+        '    WebIDL::log_trace(vm, "@class_name@::@attribute.getter_callback@");\n'
+        "    [[maybe_unused]] auto& realm = *vm.current_realm();\n"
+    )
+    g.append("\n    [[maybe_unused]] auto* impl = TRY(impl_from(vm));\n")
+    g.append(
+        "\n    auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@attribute.cpp_name@(); }));\n"
+    )
+    # generate_return_statement: just a wrap with "return" as result expression.
+    generate_wrap_statement(g, "retval", attribute.type, interface, "return")
+    g.append("\n}\n")
 
 
 def _generate_prototype_or_global_mixin_initialization(
@@ -393,8 +505,85 @@ def _generate_prototype_or_global_mixin_initialization(
                 '\n\n    @set_prototype@(&ensure_web_prototype<@prototype_base_class@>(realm, "@parent_name@"_fly_string));\n\n'
             )
 
-    # Skipped at this rung: unscopable_object, constants, overload_sets,
-    # attributes, pair iterator, async iterator, setlike, maplike, named_property_*,
+    # IDLGenerators.cpp:3957-3971 — constants on the prototype (only when
+    # not generating unforgeables).
+    if not generate_unforgeables:
+        from .types import generate_wrap_statement
+
+        for constant in interface.constants:
+            cg = g.fork()
+            cg.set("constant.name", constant.name)
+            generate_wrap_statement(
+                cg,
+                constant.value,
+                constant.type,
+                interface,
+                f"auto constant_{constant.name}_value =",
+            )
+            cg.append(
+                '\n    @define_direct_property@("@constant.name@"_utf16_fly_string, '
+                "constant_@constant.name@_value, JS::Attribute::Enumerable);\n"
+            )
+
+    # IDLGenerators.cpp:3861-3941 — per-attribute define_native_accessor.
+    from .types import attribute_callback_basename
+
+    for attribute in interface.attributes:
+        has_unforgeable = "LegacyUnforgeable" in attribute.extended_attributes
+        if generate_unforgeables and not has_unforgeable:
+            continue
+        if not generate_unforgeables and has_unforgeable:
+            continue
+        if "Experimental" in attribute.extended_attributes:
+            raise NotImplementedError(f"[Experimental] attribute init not yet supported ({attribute.name})")
+        if "SecureContext" in attribute.extended_attributes:
+            raise NotImplementedError(f"[SecureContext] attribute init not yet supported ({attribute.name})")
+        if "Unscopable" in attribute.extended_attributes:
+            raise NotImplementedError(f"[Unscopable] attribute init not yet supported ({attribute.name})")
+
+        ag = g.fork()
+        cb_base = attribute_callback_basename(attribute)
+        ag.set("attribute.name", attribute.name)
+        ag.set("attribute.getter_callback", f"{cb_base}_getter")
+        ag.set("attribute.setter_callback", f"{cb_base}_setter")
+
+        if "FIXME" in attribute.extended_attributes:
+            # IDLGenerators.cpp:3880-3890.
+            ag.append(
+                "\n"
+                '    @define_direct_property@("@attribute.name@"_utf16_fly_string, JS::js_undefined(), default_attributes | JS::Attribute::Unimplemented);\n'
+                "            "
+            )
+            continue
+
+        if has_unforgeable:
+            raise NotImplementedError(f"[LegacyUnforgeable] attribute init not yet supported ({attribute.name})")
+
+        # IDLGenerators.cpp:3901-3903 — non-unforgeable getter NativeFunction.
+        ag.append(
+            "\n"
+            '    auto native_@attribute.getter_callback@ = JS::NativeFunction::create(realm, @attribute.getter_callback@, 0, "@attribute.name@"_utf16_fly_string, &realm, "get"sv);\n'
+        )
+
+        if not attribute.readonly or any(
+            k in attribute.extended_attributes for k in ("Replaceable", "PutForwards", "LegacyLenientSetter")
+        ):
+            ag.append(
+                "\n"
+                '    auto native_@attribute.setter_callback@ = JS::NativeFunction::create(realm, @attribute.setter_callback@, 1, "@attribute.name@"_utf16_fly_string, &realm, "set"sv);\n'
+            )
+        else:
+            # IDLGenerators.cpp:3917-3920 — null setter.
+            ag.append("\n    GC::Ptr<JS::NativeFunction> native_@attribute.setter_callback@;\n")
+
+        # IDLGenerators.cpp:3928-3930 — wire the accessor into the object.
+        ag.append(
+            "\n"
+            '    @define_direct_accessor@("@attribute.name@"_utf16_fly_string, native_@attribute.getter_callback@, native_@attribute.setter_callback@, default_attributes);\n'
+        )
+
+    # Skipped at this rung: unscopable_object, overload_sets, attributes,
+    # pair iterator, async iterator, setlike, maplike, named_property_*,
     # indexed_property_*. They all add lines here at later rungs.
 
     # IDLGenerators.cpp:4129-4133 — to_string_tag (only for No).

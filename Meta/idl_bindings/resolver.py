@@ -91,6 +91,9 @@ class ImportResolver:
             imported = self._load(resolved)
             imports.append(imported)
 
+        # Record the full Interface objects so the include BFS can walk them.
+        interface.imported_interfaces = list(imports)
+
         for imported in imports:
             self._merge_import(interface, imported)
         return imports
@@ -118,6 +121,10 @@ class ImportResolver:
             # imports.
             self._resolved[real_path] = interface
             self.resolve_for(interface)
+            # Compute the post-parse names on the imported file too — codegen
+            # reads `implemented_name` etc. on imports when it walks the import
+            # graph for #include emission.
+            compute_post_parse_names(interface)
         finally:
             self._in_flight.discard(real_path)
         return interface

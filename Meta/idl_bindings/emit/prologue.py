@@ -107,12 +107,11 @@ def emit_includes_for_all_imports(
     is_iterator: bool = False,
     is_async_iterator: bool = False,
 ) -> None:
-    # IDLGenerators.cpp:465-497. BFS over the imported_modules graph; emit
-    # one #include per interface that will_generate_code(). Ladybird's
-    # imported_modules is a flat list of resolved Interfaces — we don't yet
-    # carry the full graph in our resolver, so this currently only emits
-    # the leaf include. The corpus we're targeting at this rung doesn't
-    # have multi-level imports that produce extra includes.
+    # IDLGenerators.cpp:465-497. BFS over imported_interfaces; emit one
+    # #include per interface that will_generate_code(). The Interface seen
+    # at the head of the BFS is always emitted (it's the leaf for which
+    # bindings are being generated); later interfaces are emitted only when
+    # they will themselves produce a header.
     seen: set[str] = set()
     queue: deque[Interface] = deque([interface])
     while queue:
@@ -120,9 +119,9 @@ def emit_includes_for_all_imports(
         if i.filename in seen:
             continue
         seen.add(i.filename)
-        # Without a parsed dependency graph we can't enqueue further imports.
-        # If multi-import include emission becomes parity-critical for a
-        # later rung, plumb a parsed-import dictionary through the resolver.
+        for imp in i.imported_interfaces:
+            if imp.filename not in seen:
+                queue.append(imp)
         if not _will_generate_code(i):
             continue
         _generate_include_for_interface(generator, i)

@@ -138,10 +138,24 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
             '    define_direct_property(vm.names.prototype, &ensure_web_prototype<@prototype_class@>(realm, "@namespaced_name@"_fly_string), 0);\n'
         )
 
-    # Constants / static attributes / static operations come at later rungs;
-    # for the empty interface there are none.
-    if interface.constants:
-        raise NotImplementedError("constants are not yet supported on this rung")
+    # IDLGenerators.cpp:5707-5716 — constants on the constructor object.
+    for constant in interface.constants:
+        cg = g.fork()
+        cg.set("constant.name", constant.name)
+        from .types import generate_wrap_statement
+
+        generate_wrap_statement(
+            cg,
+            constant.value,
+            constant.type,
+            interface,
+            f"auto constant_{constant.name}_value =",
+        )
+        cg.append(
+            '\n    define_direct_property("@constant.name@"_utf16_fly_string, '
+            "constant_@constant.name@_value, JS::Attribute::Enumerable);\n"
+        )
+
     if interface.static_attributes:
         raise NotImplementedError("static attributes are not yet supported on this rung")
     if interface.static_operations:

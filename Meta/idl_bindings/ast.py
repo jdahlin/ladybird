@@ -263,6 +263,12 @@ class Interface:
     # `imported_modules` mirrors IDL::Interface::imported_modules. Populated
     # by the preprocessor pass for each `#import` directive that resolves.
     imported_modules: list[str] = field(default_factory=list)
+    # The actual parsed Interface objects for each resolved import. Mirrors
+    # IDL::Interface::imported_modules in Libraries/LibIDL/Types.h:332
+    # (the C++ field holds Interface& references; we hold full objects).
+    # Populated by the ImportResolver alongside imported_modules. Walked by
+    # emit_includes_for_all_imports for the BFS that emits #include lines.
+    imported_interfaces: list["Interface"] = field(default_factory=list)
 
     # --- post-parse computed fields ---
     # IDLParser.cpp:833-856 sets these at the end of parse_interface;
