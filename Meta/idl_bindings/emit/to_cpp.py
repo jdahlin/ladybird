@@ -88,6 +88,12 @@ def generate_to_cpp(
     if type_.kind == "plain" and type_.name == "object":
         _generate_to_object(g, type_, optional=optional)
         return
+    if type_.kind == "plain" and type_.name == "Promise":
+        _generate_to_promise(g)
+        return
+    if type_.kind == "plain" and (type_.name == "BufferSource" or _is_js_builtin_buffer_type(type_.name)):
+        _generate_to_buffer_source(g, type_, optional=optional)
+        return
     if is_enum(type_, interface):
         # Attribute setters return undefined instead of throwing on invalid
         # enum values (IDLGenerators.cpp:1872-1876).
@@ -590,3 +596,71 @@ def _generate_to_callback_interface(g, type_, callback_interface) -> None:
             "    auto callback_type = vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_object(), HTML::incumbent_realm());\n"
             "    auto @cpp_name@ = TRY(throw_dom_exception_if_needed(vm, [&] { return @cpp_type@::create(realm, callback_type); }));\n"
         )
+
+
+_JS_BUILTIN_BUFFER_TYPES = frozenset(
+    {
+        "ArrayBuffer",
+        "SharedArrayBuffer",
+        "DataView",
+        "Int8Array",
+        "Int16Array",
+        "Int32Array",
+        "BigInt64Array",
+        "Uint8Array",
+        "Uint16Array",
+        "Uint32Array",
+        "BigUint64Array",
+        "Uint8ClampedArray",
+        "Float16Array",
+        "Float32Array",
+        "Float64Array",
+    }
+)
+
+
+def _is_js_builtin_buffer_type(name: str) -> bool:
+    return name in _JS_BUILTIN_BUFFER_TYPES
+
+
+def _generate_to_promise(g) -> None:
+    """Port of generate_promise_to_cpp (IDLGenerators.cpp:880-890)."""
+    g.append(
+        "\n"
+        "    // 1. Let promiseCapability be ? NewPromiseCapability(%Promise%).\n"
+        "    auto promise_capability = TRY(JS::new_promise_capability(vm, realm.intrinsics().promise_constructor()));\n"
+        "    // 2. Perform ? Call(promiseCapability.[[Resolve]], undefined, « V »).\n"
+        "    TRY(JS::call(vm, *promise_capability->resolve(), JS::js_undefined(), @js_name@@js_suffix@));\n"
+        "    // 3. Return promiseCapability.\n"
+        "    auto @cpp_name@ = GC::make_root(promise_capability);\n"
+    )
+
+
+def _generate_to_buffer_source(g, type_, *, optional) -> None:
+    """Port of generate_buffer_source_to_cpp (IDLGenerators.cpp:925-976)."""
+    indent_levels = 2 if optional else 1
+    indent = " " * (indent_levels * 4)
+    g.set("buffer_source.indent", indent)
+    if optional or type_.nullable:
+        g.append("\n    Optional<GC::Root<WebIDL::BufferSource>> @cpp_name@;\n")
+    else:
+        g.append("\n    GC::Root<WebIDL::BufferSource> @cpp_name@;\n")
+    if optional:
+        g.append("\n    if (!@js_name@@js_suffix@.is_undefined()) {\n")
+    elif type_.nullable:
+        g.append(
+            "\n"
+            "    if (@js_name@@js_suffix@.is_undefined())\n"
+            '        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
+        )
+    if type_.nullable:
+        g.append("\n@buffer_source.indent@if (!@js_name@@js_suffix@.is_null()) {\n")
+    g.append(
+        "\n@buffer_source.indent@    if (!@js_name@@js_suffix@.is_object() || !(is<JS::TypedArrayBase>(@js_name@@js_suffix@.as_object()) || is<JS::ArrayBuffer>(@js_name@@js_suffix@.as_object()) || is<JS::DataView>(@js_name@@js_suffix@.as_object())))\n"
+        '@buffer_source.indent@        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObjectOfType, "@parameter.type.name@");\n'
+        "\n@buffer_source.indent@    @cpp_name@ = GC::make_root(realm.create<WebIDL::BufferSource>(@js_name@@js_suffix@.as_object()));\n"
+    )
+    if type_.nullable:
+        g.append("\n@buffer_source.indent@}\n")
+    if optional:
+        g.append("\n    }\n")

@@ -33,6 +33,7 @@ DOM/CustomEvent.idl
 DOM/EventHandler.idl
 DOM/EventListener.idl
 DOM/Slottable.idl
+Encoding/TextDecoder.idl
 Encoding/TextEncoderCommon.idl
 Encoding/TextEncoderStream.idl
 EntriesAPI/FileSystemEntry.idl
@@ -126,6 +127,7 @@ MediaSourceExtensions/BufferedChangeEvent.idl
 MediaSourceExtensions/ManagedMediaSource.idl
 MediaSourceExtensions/ManagedSourceBuffer.idl
 MediaSourceExtensions/MediaSourceHandle.idl
+MediaSourceExtensions/SourceBuffer.idl
 NavigationTiming/PerformanceExtensions.idl
 RequestIdleCallback/IdleDeadline.idl
 RequestIdleCallback/IdleRequest.idl
@@ -178,10 +180,13 @@ UserTiming/PerformanceMeasure.idl
 WebAssembly/Global.idl
 WebAssembly/Memory.idl
 WebAssembly/Table.idl
+WebAudio/AnalyserNode.idl
+WebAudio/AudioBuffer.idl
 WebAudio/AudioBufferSourceNode.idl
 WebAudio/AudioDestinationNode.idl
 WebAudio/AudioListener.idl
 WebAudio/AudioScheduledSourceNode.idl
+WebAudio/BiquadFilterNode.idl
 WebAudio/ChannelMergerNode.idl
 WebAudio/ChannelSplitterNode.idl
 WebAudio/ConstantSourceNode.idl
