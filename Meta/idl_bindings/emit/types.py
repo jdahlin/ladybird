@@ -234,6 +234,49 @@ def is_enum(type_: Type, interface: Interface) -> bool:
     return type_.kind == "plain" and type_.name in interface.enumerations
 
 
+def is_json(type_: Type, interface: Interface) -> bool:
+    """Port of Type::is_json (Types.cpp:192-...)."""
+    if is_primitive(type_):
+        return True
+    if is_string(type_) or type_.name in interface.enumerations:
+        return True
+    if type_.name == "object":
+        return True
+    if type_.kind == "union":
+        return all(is_json(t, interface) for t in type_.union_member_types or [])
+    if type_.name in interface.typedefs:
+        td = interface.typedefs[type_.name]
+        if td.type is not None:
+            return is_json(td.type, interface)
+    if type_.kind == "parameterized" and type_.name in ("sequence", "FrozenArray", "record"):
+        return all(is_json(p, interface) for p in type_.parameters)
+    if type_.name in interface.dictionaries:
+        d = interface.dictionaries[type_.name]
+        return all(is_json(m.type, interface) for m in d.members if m.type is not None)
+    # - interface types that have a toJSON operation declared on themselves
+    #   or one of their inherited interfaces (Types.cpp:258-292).
+    cur: Interface | None = None
+    if type_.name == interface.name:
+        cur = interface
+    else:
+        for imp in interface.imported_interfaces:
+            if imp.name == type_.name:
+                cur = imp
+                break
+    while cur is not None:
+        if any(op.name == "toJSON" for op in cur.operations):
+            return True
+        if not cur.parent_name:
+            break
+        nxt = None
+        for imp in cur.imported_interfaces:
+            if imp.name == cur.parent_name:
+                nxt = imp
+                break
+        cur = nxt
+    return False
+
+
 def generate_wrap_statement(
     generator: SourceGenerator,
     value: str,

@@ -121,6 +121,11 @@ class ImportResolver:
             # imports.
             self._resolved[real_path] = interface
             self.resolve_for(interface)
+            # Resolve typedefs on the imported interface too — codegen for
+            # things like [Default] toJSON walks the parent chain and reads
+            # attribute.type, which must be the underlying type (not the
+            # typedef name).
+            resolve_typedefs(interface)
             # Compute the post-parse names on the imported file too — codegen
             # reads `implemented_name` etc. on imports when it walks the import
             # graph for #include emission.

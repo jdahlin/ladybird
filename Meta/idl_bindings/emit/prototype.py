@@ -399,7 +399,10 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
         if "FIXME" in op.extended_attributes:
             continue
         if "Default" in op.extended_attributes:
-            raise NotImplementedError("[Default] operations not yet supported")
+            if op.name == "toJSON" and op.return_type is not None and op.return_type.name == "object":
+                _generate_default_to_json_function(class_name, interface, generator)
+                continue
+            raise NotImplementedError(f"[Default] {op.name} operation not supported")
         generate_function(op, interface, class_name, static=False, generator=generator)
 
     # IDLGenerators.cpp:4888-4915 — stringifier body.
@@ -647,6 +650,21 @@ def _generate_prototype_or_global_mixin_initialization(
                 '\n\n    @set_prototype@(&ensure_web_prototype<@prototype_base_class@>(realm, "@parent_name@"_fly_string));\n\n'
             )
 
+    # IDLGenerators.cpp:3849-3859 — separate StringBuilder for [Exposed=Window]-only
+    # members. Members marked [Exposed=Window] in an interface that's exposed
+    # to a wider set get routed here, then wrapped in `if (is<HTML::Window>(...))`.
+    from .source_generator import SourceGenerator as _SG
+    from .source_generator import StringBuilder as _SB
+
+    window_builder = _SB()
+    window_g = _SG(window_builder, dict(g._mapping))
+
+    def _pick(extended_attributes: dict) -> SourceGenerator:
+        exposed = extended_attributes.get("Exposed")
+        if exposed and exposed.strip() == "Window":
+            return window_g
+        return g
+
     # IDLGenerators.cpp:3861-3941 — per-attribute define_native_accessor.
     # (Note: in the C++ source, the attributes loop comes BEFORE the
     # constants loop. Match that ordering.)
@@ -665,7 +683,7 @@ def _generate_prototype_or_global_mixin_initialization(
         if "Unscopable" in attribute.extended_attributes:
             raise NotImplementedError(f"[Unscopable] attribute init not yet supported ({attribute.name})")
 
-        ag = g.fork()
+        ag = _pick(attribute.extended_attributes).fork()
         cb_base = attribute_callback_basename(attribute)
         ag.set("attribute.name", attribute.name)
         ag.set("attribute.getter_callback", f"{cb_base}_getter")
@@ -771,7 +789,7 @@ def _generate_prototype_or_global_mixin_initialization(
         from .prototype import _make_input_acceptable_cpp
         from .prototype import _to_snakecase
 
-        og = g.fork()
+        og = _pick(first.extended_attributes).fork()
         og.set("function.name", name)
         og.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
         shortest = min(sum(1 for p in op2.parameters if not p.optional and not p.variadic) for op2 in group)
@@ -790,7 +808,12 @@ def _generate_prototype_or_global_mixin_initialization(
             if (generate_unforgeables and not has_unf) or (not generate_unforgeables and has_unf):
                 should = False
         if should:
-            g.append(
+            stringifier_eas = (
+                stringifier_attr.extended_attributes
+                if stringifier_attr is not None
+                else (interface.stringifier_extended_attributes or {})
+            )
+            _pick(stringifier_eas).append(
                 "\n"
                 '    @define_native_function@(realm, "toString"_utf16_fly_string, to_string, 0, default_attributes);\n'
             )
@@ -817,7 +840,12 @@ def _generate_prototype_or_global_mixin_initialization(
             '\n    @define_direct_property@(vm.well_known_symbol_to_string_tag(), JS::PrimitiveString::create(vm, "@namespaced_name@"_string), JS::Attribute::Configurable);\n'
         )
 
-    # Window-only members section is empty for this rung.
+    # IDLGenerators.cpp:4135-4143 — Window-only members section.
+    window_text = window_builder.to_string()
+    if window_text:
+        wg = g.fork()
+        wg.set("defines", window_text)
+        wg.append("\n    if (is<HTML::Window>(realm.global_object())) {\n@defines@\n    }\n")
 
     # IDLGenerators.cpp:4145-4149 — Base::initialize for non-global initialize().
     if not define_on_existing_object:
@@ -1015,3 +1043,117 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
             )
 
     g.append("\n    return JS::js_undefined();\n}\n")
+
+
+def _create_an_inheritance_stack(interface: Interface) -> list[Interface]:
+    """Port of create_an_inheritance_stack (IDLGenerators.cpp:3370-3394).
+
+    Walks the parent chain using imported_interfaces.
+    """
+    stack = [interface]
+    current = interface
+    while current.parent_name:
+        imp = None
+        for imported in current.imported_interfaces:
+            if imported.name == current.parent_name:
+                imp = imported
+                break
+        if imp is None:
+            break
+        stack.append(imp)
+        current = imp
+    return stack
+
+
+def _generate_default_to_json_function(class_name: str, interface: Interface, generator: SourceGenerator) -> None:
+    """Port of generate_default_to_json_function (IDLGenerators.cpp:3518-3552)."""
+    from .types import generate_wrap_statement
+    from .types import is_json
+
+    g = generator.fork()
+    g.set("class_name", class_name)
+    g.append(
+        "\n"
+        "JS_DEFINE_NATIVE_FUNCTION(@class_name@::to_json)\n"
+        "{\n"
+        '    WebIDL::log_trace(vm, "@class_name@::to_json");\n'
+        "    auto& realm = *vm.current_realm();\n"
+        "    auto* impl = TRY(impl_from(vm));\n"
+        "\n"
+        "    auto result = JS::Object::create(realm, realm.intrinsics().object_prototype());\n"
+    )
+
+    chain = _create_an_inheritance_stack(interface)
+    # Process in reverse (ancestors first).
+    for iface in reversed(chain):
+        has_default_to_json = any(
+            op.name == "toJSON" and "Default" in op.extended_attributes for op in iface.operations
+        )
+        if not has_default_to_json:
+            continue
+        for attribute in iface.attributes:
+            if "FIXME" in attribute.extended_attributes:
+                continue
+            if attribute.type is None or not is_json(attribute.type, iface):
+                continue
+            return_value_name = f"{_to_snakecase(attribute.name)}_retval"
+            ag = g.fork()
+            ag.set("attribute.name", attribute.name)
+            ag.set("attribute.return_value_name", return_value_name)
+            impl_as = attribute.extended_attributes.get("ImplementedAs")
+            if impl_as:
+                ag.set("attribute.cpp_name", impl_as)
+            else:
+                ag.set("attribute.cpp_name", _make_input_acceptable_cpp(_to_snakecase(attribute.name)))
+            reflect = attribute.extended_attributes.get("Reflect")
+            if reflect is not None:
+                reflect_name = reflect or attribute.name
+                ag.set("attribute.reflect_name", reflect_name)
+            else:
+                ag.set("attribute.reflect_name", _to_snakecase(attribute.name))
+
+            if "Reflect" in attribute.extended_attributes:
+                if attribute.type.name != "boolean":
+                    ag.append(
+                        "\n"
+                        '    auto @attribute.return_value_name@ = impl->get_attribute_value("@attribute.reflect_name@"_fly_string);\n'
+                    )
+                else:
+                    ag.append(
+                        "\n"
+                        '    auto @attribute.return_value_name@ = impl->has_attribute("@attribute.reflect_name@"_fly_string);\n'
+                    )
+            else:
+                ag.append(
+                    "\n"
+                    "    auto @attribute.return_value_name@ = TRY(throw_dom_exception_if_needed(vm, [&] { return impl->@attribute.cpp_name@(); }));\n"
+                )
+
+            ag.append("\n    JS::Value @attribute.return_value_name@_wrapped;\n")
+            generate_wrap_statement(
+                ag,
+                return_value_name,
+                attribute.type,
+                iface,
+                f"{return_value_name}_wrapped =",
+            )
+            ag.append(
+                '\n    MUST(result->create_data_property("@attribute.name@"_utf16_fly_string, @attribute.return_value_name@_wrapped));\n'
+            )
+        for constant in iface.constants:
+            cg = g.fork()
+            cg.set("constant.name", constant.name)
+            from .types import generate_wrap_statement as _wrap
+
+            _wrap(
+                cg,
+                constant.value,
+                constant.type,
+                iface,
+                f"auto constant_{constant.name}_value =",
+            )
+            cg.append(
+                '\n    MUST(result->create_data_property("@constant.name@"_utf16_fly_string, constant_@constant.name@_value));\n'
+            )
+
+    g.append("\n    return result;\n}\n")
