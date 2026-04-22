@@ -391,9 +391,6 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
         if "FIXME" in op.extended_attributes:
             continue
         overload_groups.setdefault(op.name, []).append(op)
-    for name, group in overload_groups.items():
-        if len(group) > 1:
-            raise NotImplementedError(f"operation overload arbiter for {name!r} not yet supported")
 
     for op in interface.operations:
         if "FIXME" in op.extended_attributes:
@@ -404,6 +401,20 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
                 continue
             raise NotImplementedError(f"[Default] {op.name} operation not supported")
         generate_function(op, interface, class_name, static=False, generator=generator)
+
+    # IDLGenerators.cpp:4882-4886 — overload arbiters for multi-overload sets.
+    for name, group in overload_groups.items():
+        if len(group) > 1:
+            from .overload_arbiter import generate_overload_arbiter
+
+            generate_overload_arbiter(
+                group,
+                name,
+                interface,
+                class_name,
+                is_constructor=False,
+                generator=generator,
+            )
 
     # IDLGenerators.cpp:4888-4915 — stringifier body.
     if interface.has_stringifier:

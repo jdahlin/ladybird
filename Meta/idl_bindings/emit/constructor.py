@@ -173,14 +173,25 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
             "constant_@constant.name@_value, JS::Attribute::Enumerable);\n"
         )
 
-    if interface.static_attributes:
-        raise NotImplementedError("static attributes are not yet supported on this rung")
-
-    # IDLGenerators.cpp:5734 — define_the_operations(static_overload_sets).
+    # IDLGenerators.cpp:5718-5732 — register native_accessors for static attributes.
     from .prototype import _make_input_acceptable_cpp
     from .prototype import _to_snakecase
 
+    for sa in interface.static_attributes:
+        ag = g.fork()
+        snake = _to_snakecase(sa.name)
+        ag.set("attribute.name", sa.name)
+        ag.set("attribute.getter_callback", f"{snake}_getter")
+        ag.set("attribute.setter_callback", f"{snake}_setter" if not sa.readonly else "nullptr")
+        ag.append(
+            "\n"
+            '    define_native_accessor(realm, "@attribute.name@"_utf16_fly_string, @attribute.getter_callback@, @attribute.setter_callback@, default_attributes);\n'
+        )
+
+    # IDLGenerators.cpp:5734 — define_the_operations(static_overload_sets).
+
     g.set("define_native_function", "define_native_function")
+
     static_groups: dict[str, list] = {}
     for op in interface.static_operations:
         if "FIXME" in op.extended_attributes:
@@ -203,6 +214,26 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
             '    @define_native_function@(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, @function.attributes@);\n'
         )
     g.append("\n}\n")
+
+    # IDLGenerators.cpp:5740-5768 — JS_DEFINE_NATIVE_FUNCTION for static attrs.
+    from .types import generate_wrap_statement
+
+    for sa in interface.static_attributes:
+        ag = g.fork()
+        snake = _to_snakecase(sa.name)
+        ag.set("attribute.name", sa.name)
+        ag.set("attribute.getter_callback", f"{snake}_getter")
+        cpp_name = sa.extended_attributes.get("ImplementedAs") or snake
+        ag.set("attribute.cpp_name", cpp_name)
+        ag.append(
+            "\n"
+            "JS_DEFINE_NATIVE_FUNCTION(@constructor_class@::@attribute.getter_callback@)\n"
+            "{\n"
+            '    WebIDL::log_trace(vm, "@constructor_class@::@attribute.getter_callback@");\n'
+            "    auto retval = TRY(throw_dom_exception_if_needed(vm, [&] { return @fully_qualified_name@::@attribute.cpp_name@(vm); }));\n"
+        )
+        generate_wrap_statement(ag, "retval", sa.type, interface, "return")
+        ag.append("\n}\n")
 
     # IDLGenerators.cpp:5770-5780 — JS_DEFINE_NATIVE_FUNCTION for each static op.
     from .operations import generate_function
@@ -254,9 +285,17 @@ def _generate_constructors(interface: Interface, generator: SourceGenerator) -> 
 
     for ctor in interface.constructors:
         _generate_constructor(ctor, interface, generator, has_html_constructor)
-    # generate_overload_arbiter for multi-constructor sets is added later.
     if any(getattr(c, "is_overloaded", False) for c in interface.constructors):
-        raise NotImplementedError("constructor overload arbiter not yet supported")
+        from .overload_arbiter import generate_overload_arbiter
+
+        generate_overload_arbiter(
+            list(interface.constructors),
+            interface.name,
+            interface,
+            interface.constructor_class,
+            is_constructor=True,
+            generator=generator,
+        )
 
 
 def _generate_constructor(

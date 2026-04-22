@@ -801,6 +801,10 @@ def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
         return (_INTEGER_TO_VECTOR_TYPE[t.name], "Vector")
     if t.name == "any":
         return ("JS::Value", "GC::RootVector")
+    if t.kind == "union":
+        from .types import union_type_to_variant
+
+        return (union_type_to_variant(t, interface), "Vector")
     raise NotImplementedError(f"idl_type_name_to_cpp_type for {t.name!r}")
 
 
