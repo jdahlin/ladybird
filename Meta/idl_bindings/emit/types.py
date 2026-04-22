@@ -445,6 +445,40 @@ def generate_wrap_statement(
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
+    if type_.kind == "union":
+        # IDLGenerators.cpp:2194-2241 — visit lambda per union member.
+        flat = flattened_member_types(type_)
+        ug = g.fork()
+        ug.append("\n    @result_expression@ @value_non_optional@.visit(\n")
+        for idx, member_type in enumerate(flat):
+            cpp, _ = idl_type_name_to_cpp_type(member_type, interface)
+            mg = ug.fork()
+            mg.set("current_type", cpp)
+            mg.append(
+                "\n"
+                "        [&vm, &realm]([[maybe_unused]] @current_type@ const& visited_union_value@recursion_depth@) -> JS::Value {\n"
+                "            // These may be unused.\n"
+                "            (void)vm;\n"
+                "            (void)realm;\n"
+            )
+            generate_wrap_statement(
+                mg,
+                f"visited_union_value{recursion_depth}",
+                member_type,
+                interface,
+                "return",
+                recursion_depth=recursion_depth + 1,
+            )
+            if idx != len(flat) - 1 or includes_nullable_type(type_):
+                mg.append("\n        },\n")
+            else:
+                mg.append("\n        }\n")
+        if includes_nullable_type(type_):
+            ug.append("\n        [](Empty) -> JS::Value {\n            return JS::js_null();\n        }\n")
+        ug.append("\n    );\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
     if type_.kind == "plain":
         g.append("\n    @result_expression@ &const_cast<@type@&>(*@value_non_optional@);\n")
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
@@ -496,6 +530,123 @@ def _cpp_type_name(type_: Type) -> str:
     if type_.name in _JS_BUILTIN_BUFFER_TYPES:
         return f"JS::{type_.name}"
     return type_.name
+
+
+# Storage-type for sequences in idl_type_name_to_cpp_type. Mirrors
+# SequenceStorageType in IDLGenerators.cpp.
+_SEQ_STORAGE_VECTOR = "Vector"
+_SEQ_STORAGE_ROOT_VECTOR = "RootVector"
+
+
+def idl_type_name_to_cpp_type(type_: Type, interface: Interface) -> tuple[str, str]:
+    """Port of idl_type_name_to_cpp_type (IDLGenerators.cpp:291-407).
+
+    Returns (cpp_type_name, sequence_storage_type).
+    """
+    from .to_cpp import _find_callback_interface
+
+    name = type_.name
+    if type_.kind == "plain" and _is_platform_object_name(name):
+        return (f"GC::Root<{name}>", _SEQ_STORAGE_ROOT_VECTOR)
+    if type_.kind == "plain" and name in _JS_BUILTIN_BUFFER_TYPES:
+        return (f"GC::Root<JS::{name}>", _SEQ_STORAGE_ROOT_VECTOR)
+    cb_iface = _find_callback_interface(interface, name)
+    if cb_iface is not None:
+        return (f"GC::Root<{cb_iface.implemented_name}>", _SEQ_STORAGE_ROOT_VECTOR)
+    if name in interface.callback_functions:
+        return ("GC::Root<WebIDL::CallbackType>", _SEQ_STORAGE_ROOT_VECTOR)
+    if is_string(type_):
+        if "Utf16" in name:
+            return ("Utf16String", _SEQ_STORAGE_VECTOR)
+        return ("String", _SEQ_STORAGE_VECTOR)
+    if name in ("double", "unrestricted double") and not type_.nullable:
+        return ("double", _SEQ_STORAGE_VECTOR)
+    if name in ("float", "unrestricted float") and not type_.nullable:
+        return ("float", _SEQ_STORAGE_VECTOR)
+    if name == "boolean" and not type_.nullable:
+        return ("bool", _SEQ_STORAGE_VECTOR)
+    int_map = {
+        "byte": "WebIDL::Byte",
+        "octet": "WebIDL::Octet",
+        "short": "WebIDL::Short",
+        "unsigned short": "WebIDL::UnsignedShort",
+        "long": "WebIDL::Long",
+        "unsigned long": "WebIDL::UnsignedLong",
+        "long long": "WebIDL::LongLong",
+        "unsigned long long": "WebIDL::UnsignedLongLong",
+    }
+    if name in int_map and not type_.nullable:
+        return (int_map[name], _SEQ_STORAGE_VECTOR)
+    if name == "any":
+        return ("JS::Value", _SEQ_STORAGE_ROOT_VECTOR)
+    if name == "undefined":
+        return ("Empty", _SEQ_STORAGE_ROOT_VECTOR)
+    if name == "object":
+        return ("GC::Root<JS::Object>", _SEQ_STORAGE_VECTOR)
+    if name == "BufferSource":
+        return ("GC::Root<WebIDL::BufferSource>", _SEQ_STORAGE_ROOT_VECTOR)
+    if name == "ArrayBufferView":
+        return ("GC::Root<WebIDL::ArrayBufferView>", _SEQ_STORAGE_ROOT_VECTOR)
+    if name == "Function":
+        return ("GC::Ref<WebIDL::CallbackType>", _SEQ_STORAGE_ROOT_VECTOR)
+    if name == "Promise":
+        return ("GC::Root<WebIDL::Promise>", _SEQ_STORAGE_ROOT_VECTOR)
+    if name in ("sequence", "FrozenArray"):
+        elem_cpp, elem_storage = idl_type_name_to_cpp_type(type_.parameters[0], interface)
+        storage_name = "GC::RootVector" if elem_storage == _SEQ_STORAGE_ROOT_VECTOR else "Vector"
+        if elem_storage == _SEQ_STORAGE_ROOT_VECTOR:
+            return (storage_name, _SEQ_STORAGE_VECTOR)
+        return (f"{storage_name}<{elem_cpp}>", _SEQ_STORAGE_VECTOR)
+    if name == "record":
+        k_cpp, _ = idl_type_name_to_cpp_type(type_.parameters[0], interface)
+        v_cpp, _ = idl_type_name_to_cpp_type(type_.parameters[1], interface)
+        return (f"OrderedHashMap<{k_cpp}, {v_cpp}>", _SEQ_STORAGE_VECTOR)
+    if type_.kind == "union":
+        return (union_type_to_variant(type_, interface), _SEQ_STORAGE_VECTOR)
+    if not type_.nullable and name in interface.dictionaries:
+        return (name, _SEQ_STORAGE_VECTOR)
+    if name in interface.enumerations:
+        return (name, _SEQ_STORAGE_VECTOR)
+    raise NotImplementedError(f"idl_type_name_to_cpp_type for {name!r} (kind={type_.kind})")
+
+
+def flattened_member_types(union_type: Type) -> list[Type]:
+    """Port of UnionType::flattened_member_types (Types.h:378-403)."""
+    out: list[Type] = []
+    for t in union_type.union_member_types or []:
+        if t.kind == "union":
+            out.extend(flattened_member_types(t))
+        else:
+            out.append(t)
+    return out
+
+
+def includes_undefined(type_: Type) -> bool:
+    if type_.kind == "union":
+        return any(includes_undefined(t) for t in type_.union_member_types or [])
+    return type_.name == "undefined"
+
+
+def includes_nullable_type(type_: Type) -> bool:
+    # Mirror Type::includes_nullable_type (Types.cpp:34-49): own nullable flag
+    # OR any member of a union being nullable.
+    if type_.nullable:
+        return True
+    if type_.kind == "union":
+        return any(includes_nullable_type(t) for t in type_.union_member_types or [])
+    return False
+
+
+def union_type_to_variant(union_type: Type, interface: Interface) -> str:
+    """Port of union_type_to_variant (IDLGenerators.cpp:268-289)."""
+    flat = flattened_member_types(union_type)
+    parts: list[str] = []
+    for t in flat:
+        cpp, _ = idl_type_name_to_cpp_type(t, interface)
+        parts.append(cpp)
+    if includes_undefined(union_type) or includes_nullable_type(union_type):
+        parts.append("Empty")
+    return f"Variant<{', '.join(parts)}>"
 
 
 def attribute_callback_basename(attribute) -> str:

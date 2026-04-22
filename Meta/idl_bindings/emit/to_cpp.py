@@ -131,6 +131,21 @@ def generate_to_cpp(
             recursion_depth=recursion_depth,
         )
         return
+    if type_.kind == "union":
+        _generate_to_union(
+            parameter,
+            type_,
+            js_name,
+            js_suffix,
+            cpp_name,
+            interface,
+            g,
+            optional=optional,
+            optional_default_value=optional_default_value,
+            variadic=variadic,
+            recursion_depth=recursion_depth,
+        )
+        return
     callback_iface = _find_callback_interface(interface, type_.name)
     if callback_iface is not None:
         _generate_to_callback_interface(g, type_, callback_iface)
@@ -889,3 +904,464 @@ def _generate_sequence_from_iterable(
         recursion_depth=recursion_depth,
     )
     g.append("\n    @cpp_name@.append(sequence_item@recursion_depth@);\n    }\n")
+
+
+def _generate_to_union(
+    parameter,
+    type_,
+    js_name: str,
+    js_suffix: str,
+    cpp_name: str,
+    interface: Interface,
+    generator: SourceGenerator,
+    *,
+    optional,
+    optional_default_value,
+    variadic,
+    recursion_depth: int,
+) -> None:
+    """Port of generate_union_to_cpp (IDLGenerators.cpp:1295-1827)."""
+    from ..ast import Parameter
+    from .types import _is_platform_object_name
+    from .types import flattened_member_types
+    from .types import includes_nullable_type
+    from .types import includes_undefined
+    from .types import is_string
+    from .types import union_type_to_variant
+
+    ug = generator.fork()
+    ug.set("union_type", union_type_to_variant(type_, interface))
+    ug.set("recursion_depth", str(recursion_depth))
+
+    types = flattened_member_types(type_)
+
+    # Dictionary lookup — iterate interface.dictionaries to match the C++ ordering.
+    dictionary_type = None
+    for dict_name in interface.dictionaries:
+        for t in types:
+            if t.name == dict_name:
+                dictionary_type = t
+                break
+        if dictionary_type is not None:
+            break
+
+    if dictionary_type is not None:
+        dg = ug.fork()
+        dg.set("dictionary.type", dictionary_type.name)
+        dg.append(
+            "\n"
+            "    auto @js_name@@js_suffix@_to_dictionary = [&vm, &realm](JS::Value @js_name@@js_suffix@) -> JS::ThrowCompletionOr<@dictionary.type@> {\n"
+            "        // This might be unused.\n"
+            "        (void)realm;\n"
+        )
+        dict_param = Parameter(type=dictionary_type, name=cpp_name, optional_default_value=None, extended_attributes={})
+        generate_to_cpp(
+            dict_param,
+            js_name,
+            js_suffix,
+            "dictionary_union_type",
+            interface,
+            dg,
+            optional=False,
+            optional_default_value=None,
+            variadic=False,
+            recursion_depth=recursion_depth + 1,
+        )
+        dg.append("\n        return dictionary_union_type;\n    };\n")
+
+    to_variant_captures = "&vm, &realm"
+    if dictionary_type is not None:
+        to_variant_captures += f", &{js_name}{js_suffix}_to_dictionary"
+    ug.set("to_variant_captures", to_variant_captures)
+
+    ug.append(
+        "\n"
+        "    auto @js_name@@js_suffix@_to_variant = [@to_variant_captures@](JS::Value @js_name@@js_suffix@) -> JS::ThrowCompletionOr<@union_type@> {\n"
+        "        // These might be unused.\n"
+        "        (void)vm;\n"
+        "        (void)realm;\n"
+    )
+
+    if includes_undefined(type_):
+        # NOTE: C++ writes to scoped_generator (outer) here (IDLGenerators.cpp:1368).
+        generator.append("\n        if (@js_name@@js_suffix@.is_undefined())\n            return Empty {};\n")
+
+    if includes_nullable_type(type_):
+        ug.append("\n        if (@js_name@@js_suffix@.is_nullish())\n            return Empty {};\n")
+    elif dictionary_type is not None:
+        ug.append(
+            "\n"
+            "        if (@js_name@@js_suffix@.is_nullish())\n"
+            "            return @union_type@ { TRY(@js_name@@js_suffix@_to_dictionary(@js_name@@js_suffix@)) };\n"
+        )
+
+    includes_object = any(t.name == "object" for t in types)
+
+    ug.append(
+        "\n"
+        "        if (@js_name@@js_suffix@.is_object()) {\n"
+        "            [[maybe_unused]] auto& @js_name@@js_suffix@_object = @js_name@@js_suffix@.as_object();\n"
+    )
+
+    includes_platform_object = any(_is_platform_object_name(t.name) for t in types)
+    if includes_platform_object:
+        ug.append("\n            if (is<PlatformObject>(@js_name@@js_suffix@_object)) {\n")
+        for t in types:
+            if not _is_platform_object_name(t.name):
+                continue
+            pg = ug.fork()
+            pg.set("platform_object_type", t.name)
+            pg.append(
+                "\n"
+                "                if (auto* @js_name@@js_suffix@_result = as_if<@platform_object_type@>(@js_name@@js_suffix@_object))\n"
+                "                    return GC::make_root(*@js_name@@js_suffix@_result);\n"
+            )
+        if includes_object:
+            ug.append("\n                return GC::make_root(@js_name@@js_suffix@_object);\n")
+        ug.append("\n            }\n")
+
+    includes_window_proxy = any(t.name == "WindowProxy" for t in types)
+    if includes_window_proxy:
+        ug.append(
+            "\n"
+            "            if (auto* @js_name@@js_suffix@_result = as_if<WindowProxy>(@js_name@@js_suffix@_object))\n"
+            "                return GC::make_root(*@js_name@@js_suffix@_result);\n"
+        )
+
+    if any(t.name == "BufferSource" for t in types) and not includes_object:
+        ug.append(
+            "\n"
+            "            if (is<JS::ArrayBuffer>(@js_name@@js_suffix@_object) || is<JS::DataView>(@js_name@@js_suffix@_object) || is<JS::TypedArrayBase>(@js_name@@js_suffix@_object)) {\n"
+            "                GC::Ref<WebIDL::BufferSource> source_object = realm.create<WebIDL::BufferSource>(@js_name@@js_suffix@_object);\n"
+            "                return GC::make_root(source_object);\n"
+            "            }\n"
+        )
+
+    if any(t.name == "ArrayBuffer" for t in types) or includes_object:
+        ug.append(
+            "\n"
+            "            if (is<JS::ArrayBuffer>(@js_name@@js_suffix@_object))\n"
+            "                return GC::make_root(@js_name@@js_suffix@_object);\n"
+        )
+
+    if any(t.name == "DataView" for t in types) or includes_object:
+        ug.append(
+            "\n"
+            "            if (is<JS::DataView>(@js_name@@js_suffix@_object))\n"
+            "                return GC::make_root(@js_name@@js_suffix@_object);\n"
+        )
+
+    typed_arrays = {
+        "Int8Array",
+        "Int16Array",
+        "Int32Array",
+        "Uint8Array",
+        "Uint16Array",
+        "Uint32Array",
+        "Uint8ClampedArray",
+        "BigInt64Array",
+        "BigUint64Array",
+        "Float16Array",
+        "Float32Array",
+        "Float64Array",
+    }
+    typed_array_name = next((t.name for t in types if t.name in typed_arrays), None)
+    if typed_array_name is not None:
+        ug.set("typed_array_type", typed_array_name)
+        ug.append(
+            "\n"
+            "            if (auto* typed_array = as_if<JS::@typed_array_type@>(@js_name@@js_suffix@_object))\n"
+            "                return GC::make_root(*typed_array);\n"
+        )
+    elif includes_object:
+        ug.append(
+            "\n"
+            "            if (is<JS::TypedArrayBase>(@js_name@@js_suffix@_object))\n"
+            "                return GC::make_root(@js_name@@js_suffix@_object);\n"
+        )
+
+    includes_callable = any(t.name == "Function" for t in types)
+    if includes_callable:
+        ug.append(
+            "\n"
+            "            if (@js_name@@js_suffix@_object.is_function())\n"
+            "                return vm.heap().allocate<WebIDL::CallbackType>(@js_name@@js_suffix@.as_function(), HTML::incumbent_realm());\n"
+        )
+
+    sequence_type = next((t for t in types if t.name == "sequence"), None)
+    if sequence_type is not None:
+        ug.append(
+            "\n"
+            "        auto method = TRY(@js_name@@js_suffix@.get_method(vm, vm.well_known_symbol_iterator()));\n"
+            "        if (method) {\n"
+        )
+        _generate_sequence_from_iterable(
+            ug, sequence_type, cpp_name, f"{js_name}{js_suffix}", "method", interface, recursion_depth + 1
+        )
+        ug.append("\n\n            return @cpp_name@;\n        }\n")
+
+    if dictionary_type is not None:
+        ug.append("\n        return @union_type@ { TRY(@js_name@@js_suffix@_to_dictionary(@js_name@@js_suffix@)) };\n")
+
+    record_type = next((t for t in types if t.name == "record"), None)
+    if record_type is not None:
+        rec_param = Parameter(type=record_type, name=cpp_name, optional_default_value=None, extended_attributes={})
+        generate_to_cpp(
+            rec_param,
+            js_name,
+            js_suffix,
+            "record_union_type",
+            interface,
+            ug,
+            optional=False,
+            optional_default_value=None,
+            variadic=False,
+            recursion_depth=recursion_depth + 1,
+        )
+        ug.append("\n        return record_union_type;\n")
+
+    for t in types:
+        cb = _find_callback_interface(interface, t.name)
+        if cb is None:
+            continue
+        cb_param = Parameter(type=t, name=cpp_name, optional_default_value=None, extended_attributes={})
+        generate_to_cpp(
+            cb_param,
+            js_name,
+            js_suffix,
+            "callback_interface_union_type",
+            interface,
+            ug,
+            optional=False,
+            optional_default_value=None,
+            variadic=False,
+            recursion_depth=recursion_depth + 1,
+        )
+        ug.append("\n        return callback_interface_union_type;\n")
+        break
+
+    if includes_object:
+        ug.append("\n        return @js_name@@js_suffix@_object;\n")
+
+    ug.append("\n        }\n")
+
+    includes_boolean = any(t.name == "boolean" for t in types)
+    if includes_boolean:
+        ug.append(
+            "\n"
+            "        if (@js_name@@js_suffix@.is_boolean())\n"
+            "            return @union_type@ { @js_name@@js_suffix@.as_bool() };\n"
+        )
+
+    def _is_numeric(t):
+        return t.name in (
+            "byte",
+            "octet",
+            "short",
+            "unsigned short",
+            "long",
+            "unsigned long",
+            "long long",
+            "unsigned long long",
+            "float",
+            "double",
+            "unrestricted float",
+            "unrestricted double",
+        )
+
+    numeric_type = next((t for t in types if _is_numeric(t)), None)
+    if numeric_type is not None:
+        ug.append("\n        if (@js_name@@js_suffix@.is_number()) {\n")
+        num_param = Parameter(
+            type=numeric_type, name=parameter.name, optional_default_value=None, extended_attributes={}
+        )
+        generate_to_cpp(
+            num_param,
+            js_name,
+            js_suffix,
+            f"{js_name}{js_suffix}_number",
+            interface,
+            ug,
+            optional=False,
+            optional_default_value=None,
+            variadic=False,
+            recursion_depth=recursion_depth + 1,
+        )
+        ug.append("\n            return { @js_name@@js_suffix@_number };\n        }\n")
+
+    includes_bigint = any(t.name == "bigint" for t in types)
+    if includes_bigint:
+        ug.append(
+            "\n        if (@js_name@@js_suffix@.is_bigint())\n            return @js_name@@js_suffix@.as_bigint();\n"
+        )
+
+    includes_enumeration = any(t.name in interface.enumerations for t in types)
+    if includes_enumeration:
+        ug.append(
+            "\n"
+            "        if (@js_name@@js_suffix@.is_string()) {\n"
+            "            auto @js_name@@js_suffix@_enum_string = TRY(@js_name@@js_suffix@.to_string(vm));\n"
+        )
+        for t in types:
+            if t.name not in interface.enumerations:
+                continue
+            enum = interface.enumerations[t.name]
+            enum_cpp, _ = _idl_type_name_to_cpp_type(t, interface)
+            eg = ug.fork()
+            eg.set("enum.type", enum_cpp)
+            for raw, cpp_val in enum.translated_cpp_names.items():
+                eg.set("enum.alt.name", raw)
+                eg.set("enum.alt.value", cpp_val)
+                eg.append(
+                    "\n"
+                    '            if (@js_name@@js_suffix@_enum_string == "@enum.alt.name@"sv)\n'
+                    "                return @union_type@ { @enum.type@::@enum.alt.value@ };\n"
+                )
+        ug.append("\n        }\n")
+
+    string_type = next((t for t in types if is_string(t)), None)
+    if string_type is not None:
+        str_param = Parameter(
+            type=string_type,
+            name=parameter.name,
+            optional_default_value=None,
+            extended_attributes=parameter.extended_attributes,
+        )
+        generate_to_cpp(
+            str_param,
+            js_name,
+            js_suffix,
+            f"{js_name}{js_suffix}_string",
+            interface,
+            ug,
+            optional=False,
+            optional_default_value=None,
+            variadic=False,
+            recursion_depth=recursion_depth + 1,
+        )
+        ug.append("\n        return { @js_name@@js_suffix@_string };\n")
+    elif numeric_type is not None and includes_bigint:
+        ug.append(
+            "\n"
+            "        auto x = TRY(@js_name@@js_suffix@.to_numeric(vm));\n"
+            "        if (x.is_bigint())\n"
+            "            return x.as_bigint();\n"
+            "        VERIFY(x.is_number());\n"
+        )
+        num_param = Parameter(
+            type=numeric_type, name=parameter.name, optional_default_value=None, extended_attributes={}
+        )
+        generate_to_cpp(
+            num_param,
+            "x",
+            "",
+            "x_number",
+            interface,
+            ug,
+            optional=False,
+            optional_default_value=None,
+            variadic=False,
+            recursion_depth=recursion_depth + 1,
+        )
+        ug.append("\n        return x_number;\n")
+    elif numeric_type is not None:
+        num_param = Parameter(
+            type=numeric_type, name=parameter.name, optional_default_value=None, extended_attributes={}
+        )
+        generate_to_cpp(
+            num_param,
+            js_name,
+            js_suffix,
+            f"{js_name}{js_suffix}_number",
+            interface,
+            ug,
+            optional=False,
+            optional_default_value=None,
+            variadic=False,
+            recursion_depth=recursion_depth + 1,
+        )
+        ug.append("\n        return { @js_name@@js_suffix@_number };\n")
+    elif includes_boolean:
+        ug.append("\n        return @union_type@ { @js_name@@js_suffix@.to_boolean() };\n")
+    elif includes_bigint:
+        ug.append("\n        return TRY(@js_name@@js_suffix@.to_bigint(vm));\n")
+    else:
+        ug.append('\n        return vm.throw_completion<JS::TypeError>("No union types matched"sv);\n')
+
+    ug.append("\n    };\n")
+
+    if not variadic:
+        if not optional:
+            ug.append("\n    @union_type@ @cpp_name@ = TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n")
+        else:
+            if optional_default_value is None:
+                ug.append(
+                    "\n"
+                    "    Optional<@union_type@> @cpp_name@;\n"
+                    "    if (!@js_name@@js_suffix@.is_undefined())\n"
+                    "        @cpp_name@ = TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n"
+                )
+            elif optional_default_value == "null":
+                if includes_nullable_type(type_):
+                    ug.append(
+                        "\n"
+                        "    @union_type@ @cpp_name@ = @js_name@@js_suffix@.is_undefined() ? @union_type@ { Empty {} } : TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n"
+                    )
+                else:
+                    ug.append(
+                        "\n"
+                        "    Optional<@union_type@> @cpp_name@;\n"
+                        "    if (!@js_name@@js_suffix@.is_nullish())\n"
+                        "        @cpp_name@ = TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n"
+                    )
+            elif optional_default_value == '""':
+                ug.append(
+                    "\n"
+                    "    @union_type@ @cpp_name@ = @js_name@@js_suffix@.is_undefined() ? TRY(@js_name@@js_suffix@_to_variant(JS::Value(JS::PrimitiveString::create(vm, String {})))) : TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n"
+                )
+            elif optional_default_value.startswith('"') and optional_default_value.endswith('"'):
+                ug.set("default_string_value", optional_default_value)
+                ug.append(
+                    "\n"
+                    "    @union_type@ @cpp_name@ = @js_name@@js_suffix@.is_undefined() ? TRY(@js_name@@js_suffix@_to_variant(JS::Value(JS::PrimitiveString::create(vm, MUST(String::from_utf8(@default_string_value@sv)))))) : TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n"
+                )
+            elif optional_default_value == "{}":
+                ug.append(
+                    "\n"
+                    "    @union_type@ @cpp_name@ = @js_name@@js_suffix@.is_undefined() ? TRY(@js_name@@js_suffix@_to_dictionary(@js_name@@js_suffix@)) : TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n"
+                )
+            elif optional_default_value in ("true", "false") or _is_numeric_literal(optional_default_value):
+                ug.append(
+                    "\n"
+                    "    @union_type@ @cpp_name@ = @js_name@@js_suffix@.is_undefined() ? @parameter.optional_default_value@ : TRY(@js_name@@js_suffix@_to_variant(@js_name@@js_suffix@));\n"
+                )
+            else:
+                raise NotImplementedError(f"union optional default {optional_default_value!r}")
+    else:
+        ug.append(
+            "\n"
+            "        Vector<@union_type@> @cpp_name@;\n"
+            "\n"
+            "        if (vm.argument_count() > @js_suffix@) {\n"
+            "            @cpp_name@.ensure_capacity(vm.argument_count() - @js_suffix@);\n"
+            "\n"
+            "            for (size_t i = @js_suffix@; i < vm.argument_count(); ++i) {\n"
+            "                auto result = TRY(@js_name@@js_suffix@_to_variant(vm.argument(i)));\n"
+            "                @cpp_name@.unchecked_append(move(result));\n"
+            "            }\n"
+            "        }\n"
+            "    "
+        )
+
+
+def _is_numeric_literal(s: str) -> bool:
+    try:
+        int(s)
+        return True
+    except ValueError:
+        pass
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
