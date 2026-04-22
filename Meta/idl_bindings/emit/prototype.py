@@ -452,7 +452,7 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
         is_nullable = bool(getattr(attribute.type, "nullable", False))
         # Supported reflect type slice.
         supported = (
-            (type_name == "DOMString" and not is_nullable)
+            type_name == "DOMString"
             or type_name == "boolean"
             or type_name == "USVString"
             or type_name == "long"
@@ -481,7 +481,47 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
 
     if is_reflect:
         type_name = attribute.type.name
-        if type_name == "DOMString":
+        if type_name == "DOMString" and is_nullable:
+            # IDLGenerators.cpp:4587-4667 — DOMString? branch.
+            g.append('\n    auto content_attribute_value = impl->attribute("@attribute.reflect_name@"_fly_string);\n')
+            if "Enumerated" in attribute.extended_attributes:
+                enum_type = attribute.extended_attributes["Enumerated"]
+                enumeration = interface.enumerations[enum_type]
+                mvd = enumeration.extended_attributes.get("MissingValueDefault", "")
+                ivd = enumeration.extended_attributes.get("InvalidValueDefault", "")
+                valid_values = ", ".join(f'"{v}"_string' for v in enumeration.values)
+                g.set("missing_enum_default_value", mvd)
+                g.set("invalid_enum_default_value", ivd)
+                g.set("valid_enum_values", valid_values)
+                g.append('\n    auto retval = impl->attribute("@attribute.reflect_name@"_fly_string);\n')
+                g.append("\n    Array valid_values { @valid_enum_values@ };\n    ")
+                if "InvalidValueDefault" in enumeration.extended_attributes:
+                    g.append(
+                        "\n"
+                        "\n"
+                        "    if (retval.has_value()) {\n"
+                        "        auto found = false;\n"
+                        "        for (auto const& value : valid_values) {\n"
+                        "            if (value.equals_ignoring_ascii_case(retval.value())) {\n"
+                        "                found = true;\n"
+                        "                retval = value;\n"
+                        "                break;\n"
+                        "            }\n"
+                        "        }\n"
+                        "\n"
+                        "        if (!found)\n"
+                        '            retval = "@invalid_enum_default_value@"_string;\n'
+                        "    }\n"
+                        "    "
+                    )
+                if "MissingValueDefault" in enumeration.extended_attributes:
+                    g.append(
+                        '\n    if (!retval.has_value())\n        retval = "@missing_enum_default_value@"_string;\n    '
+                    )
+                g.append("\n    VERIFY(!retval.has_value() || valid_values.contains_slow(retval.value()));\n")
+            else:
+                g.append("\n    auto retval = move(content_attribute_value);\n")
+        elif type_name == "DOMString":
             g.append(
                 "\n"
                 '    auto contentAttributeValue = impl->attribute("@attribute.reflect_name@"_fly_string);\n'
@@ -650,6 +690,10 @@ def _generate_prototype_or_global_mixin_initialization(
                 '\n\n    @set_prototype@(&ensure_web_prototype<@prototype_base_class@>(realm, "@parent_name@"_fly_string));\n\n'
             )
 
+    # IDLGenerators.cpp:3842-3846 — unscopable object allocation.
+    if interface.has_unscopable_member and not generate_unforgeables:
+        g.append("\n    auto unscopable_object = JS::Object::create(realm, nullptr);\n")
+
     # IDLGenerators.cpp:3849-3859 — separate StringBuilder for [Exposed=Window]-only
     # members. Members marked [Exposed=Window] in an interface that's exposed
     # to a wider set get routed here, then wrapped in `if (is<HTML::Window>(...))`.
@@ -678,12 +722,13 @@ def _generate_prototype_or_global_mixin_initialization(
             continue
         if "Experimental" in attribute.extended_attributes:
             raise NotImplementedError(f"[Experimental] attribute init not yet supported ({attribute.name})")
-        if "SecureContext" in attribute.extended_attributes:
-            raise NotImplementedError(f"[SecureContext] attribute init not yet supported ({attribute.name})")
-        if "Unscopable" in attribute.extended_attributes:
-            raise NotImplementedError(f"[Unscopable] attribute init not yet supported ({attribute.name})")
 
         ag = _pick(attribute.extended_attributes).fork()
+        if "SecureContext" in attribute.extended_attributes:
+            ag.append(
+                "\n"
+                "    if (HTML::is_secure_context(Bindings::principal_host_defined_environment_settings_object(realm))) {"
+            )
         cb_base = attribute_callback_basename(attribute)
         ag.set("attribute.name", attribute.name)
         ag.set("attribute.getter_callback", f"{cb_base}_getter")
@@ -718,11 +763,22 @@ def _generate_prototype_or_global_mixin_initialization(
             # IDLGenerators.cpp:3917-3920 — null setter.
             ag.append("\n    GC::Ptr<JS::NativeFunction> native_@attribute.setter_callback@;\n")
 
+        # IDLGenerators.cpp:3922-3926 — Unscopable: mark in unscopable_object.
+        if "Unscopable" in attribute.extended_attributes:
+            ag.append(
+                "\n"
+                '    MUST(unscopable_object->create_data_property("@attribute.name@"_utf16_fly_string, JS::Value(true)));\n'
+            )
+
         # IDLGenerators.cpp:3928-3930 — wire the accessor into the object.
         ag.append(
             "\n"
             '    @define_direct_accessor@("@attribute.name@"_utf16_fly_string, native_@attribute.getter_callback@, native_@attribute.setter_callback@, default_attributes);\n'
         )
+
+        # IDLGenerators.cpp:3932-3935 — close SecureContext block.
+        if "SecureContext" in attribute.extended_attributes:
+            ag.append("\n    }")
 
     # Skipped at this rung: unscopable_object, overload_sets, attributes,
     # pair iterator, async iterator, setlike, maplike, named_property_*,
@@ -782,10 +838,6 @@ def _generate_prototype_or_global_mixin_initialization(
             continue
         if not generate_unforgeables and has_unforgeable:
             continue
-        if "SecureContext" in first.extended_attributes:
-            raise NotImplementedError("[SecureContext] operations not yet supported")
-        if "Unscopable" in first.extended_attributes:
-            raise NotImplementedError("[Unscopable] operations not yet supported")
         from .prototype import _make_input_acceptable_cpp
         from .prototype import _to_snakecase
 
@@ -794,10 +846,22 @@ def _generate_prototype_or_global_mixin_initialization(
         og.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
         shortest = min(sum(1 for p in op2.parameters if not p.optional and not p.variadic) for op2 in group)
         og.set("function.length", str(shortest))
+        if "SecureContext" in first.extended_attributes:
+            og.append(
+                "\n"
+                "    if (HTML::is_secure_context(Bindings::principal_host_defined_environment_settings_object(realm))) {"
+            )
+        if any("Unscopable" in op.extended_attributes for op in group):
+            og.append(
+                "\n"
+                '    MUST(unscopable_object->create_data_property("@function.name@"_utf16_fly_string, JS::Value(true)));\n'
+            )
         og.append(
             "\n"
             '    @define_native_function@(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, default_attributes);\n'
         )
+        if "SecureContext" in first.extended_attributes:
+            og.append("\n    }")
 
     # IDLGenerators.cpp:4008-4022 — stringifier toString registration.
     if getattr(interface, "has_stringifier", False):
@@ -833,6 +897,13 @@ def _generate_prototype_or_global_mixin_initialization(
                 "    @define_direct_property@(vm.names.values, realm.intrinsics().array_prototype()->get_without_side_effects(vm.names.values), default_attributes);\n"
                 "    @define_direct_property@(vm.names.forEach, realm.intrinsics().array_prototype()->get_without_side_effects(vm.names.forEach), default_attributes);\n"
             )
+
+    # IDLGenerators.cpp:4123-4127 — register the unscopable object.
+    if interface.has_unscopable_member and not generate_unforgeables:
+        g.append(
+            "\n"
+            "    @define_direct_property@(vm.well_known_symbol_unscopables(), unscopable_object, JS::Attribute::Configurable);\n"
+        )
 
     # IDLGenerators.cpp:4129-4133 — to_string_tag (only for No).
     if not generate_unforgeables:

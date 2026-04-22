@@ -625,6 +625,8 @@ class Parser:
             # union return). _parse_regular_operation handles that.
             op = self._parse_regular_operation(extended_attributes, static=False)
             target.operations.append(op)
+            if "Unscopable" in extended_attributes:
+                target.has_unscopable_member = True
 
     # AttributeRest :: attribute TypeWithExtendedAttributes AttributeName ;
     # https://webidl.spec.whatwg.org/#prod-Attribute
@@ -663,6 +665,8 @@ class Parser:
             target.static_attributes.append(attribute)
         else:
             target.attributes.append(attribute)
+            if "Unscopable" in extended_attributes:
+                target.has_unscopable_member = True
 
     # Const :: const ConstType identifier = ConstValue ;
     # https://webidl.spec.whatwg.org/#prod-Const

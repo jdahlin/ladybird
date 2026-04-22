@@ -321,6 +321,8 @@ def resolve_includes(interface: Interface) -> None:
         interface.constants.extend(mixin.constants)
         interface.operations.extend(mixin.operations)
         interface.static_operations.extend(mixin.static_operations)
+        if mixin.has_unscopable_member:
+            interface.has_unscopable_member = True
         if mixin.has_stringifier:
             if interface.has_stringifier:
                 raise ValueError(

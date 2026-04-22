@@ -213,6 +213,7 @@ class Interface:
     static_operations: list[Operation] = field(default_factory=list)
 
     has_stringifier: bool = False
+    has_unscopable_member: bool = False
     stringifier_attribute: Optional[Attribute] = None
     stringifier_extended_attributes: Optional[dict[str, str]] = None
 
