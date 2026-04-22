@@ -460,6 +460,80 @@ def _number(items: list) -> None:
             item.is_overloaded = True
 
 
+# --- pass 6: compute post-parse name fields ---
+
+
+# A subset of `Libraries/LibWeb/<dir>/` directory names whose interfaces are
+# referenced as `<dir>::<name>` rather than just `<name>` in generated code.
+# Mirrors the `libweb_interface_namespaces` array in
+# Meta/Lagom/Tools/CodeGenerators/LibWeb/BindingsGenerator/Namespaces.h.
+# Populated lazily on first use from the C++ header so the two stay in sync.
+_LIBWEB_INTERFACE_NAMESPACES: tuple[str, ...] | None = None
+
+
+def _libweb_interface_namespaces() -> tuple[str, ...]:
+    global _LIBWEB_INTERFACE_NAMESPACES
+    if _LIBWEB_INTERFACE_NAMESPACES is not None:
+        return _LIBWEB_INTERFACE_NAMESPACES
+    # Locate Namespaces.h relative to this file so the lookup works regardless
+    # of the cwd. The file lives next to BindingsGenerator/main.cpp.
+    here = Path(__file__).resolve()
+    repo_root = here.parents[2]  # .../Meta/idl_bindings/resolver.py → repo root
+    namespaces_h = repo_root / "Meta/Lagom/Tools/CodeGenerators/LibWeb/BindingsGenerator/Namespaces.h"
+    out: list[str] = []
+    if namespaces_h.exists():
+        # The file is a simple list of `"Foo"sv,` entries inside an Array<>{}.
+        text = namespaces_h.read_text()
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith('"') and line.endswith('"sv,'):
+                out.append(line[1:-4])
+    _LIBWEB_INTERFACE_NAMESPACES = tuple(out)
+    return _LIBWEB_INTERFACE_NAMESPACES
+
+
+def compute_post_parse_names(interface: Interface) -> None:
+    """Set the computed name fields on `interface`.
+
+    Mirrors the tail of IDLParser.cpp:parse_interface (lines 833-856) and
+    main.cpp:60-69 (for `fully_qualified_name`). Splitting this out keeps
+    the parser pure and lets the resolver run it after include flattening.
+    """
+    # `[ImplementedAs=...]` overrides the C++ symbol name.
+    interface.implemented_name = interface.extended_attributes.get("ImplementedAs", interface.name)
+
+    # `[LegacyNamespace=Web]` produces a "Web.Foo" qualified name used in
+    # interface tables and a couple of error messages.
+    legacy_namespace = interface.extended_attributes.get("LegacyNamespace")
+    if legacy_namespace:
+        interface.namespaced_name = f"{legacy_namespace}.{interface.name}"
+    else:
+        interface.namespaced_name = interface.name
+
+    # main.cpp computes fully_qualified_name from the IDL file's parent
+    # directory (e.g. Libraries/LibWeb/HTML/Foo.idl → "HTML"). If that
+    # directory is in the libweb_interface_namespaces list, the name is
+    # qualified.
+    if interface.filename:
+        parts = Path(interface.filename).parts
+        # Take the directory just above the file (e.g. ".../HTML/Foo.idl" → "HTML").
+        directory = parts[-2] if len(parts) >= 2 else ""
+        if directory in _libweb_interface_namespaces():
+            interface.fully_qualified_name = f"{directory}::{interface.implemented_name}"
+        else:
+            interface.fully_qualified_name = interface.implemented_name
+    else:
+        interface.fully_qualified_name = interface.implemented_name
+
+    # Class names used as JS prototype/constructor identifiers.
+    interface.constructor_class = f"{interface.implemented_name}Constructor"
+    interface.prototype_class = f"{interface.implemented_name}Prototype"
+    parent = interface.parent_name or "Object"
+    interface.prototype_base_class = f"{parent}Prototype"
+    interface.namespace_class = f"{interface.name}Namespace"
+    interface.global_mixin_class = f"{interface.name}GlobalMixin"
+
+
 # --- driver ---
 
 
@@ -476,4 +550,5 @@ def parse_and_resolve(source: str, filename: str, import_base_paths: list[Path])
     resolve_includes(interface)
     resolve_typedefs(interface)
     number_overload_sets(interface)
+    compute_post_parse_names(interface)
     return interface

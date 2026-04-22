@@ -264,6 +264,20 @@ class Interface:
     # by the preprocessor pass for each `#import` directive that resolves.
     imported_modules: list[str] = field(default_factory=list)
 
+    # --- post-parse computed fields ---
+    # IDLParser.cpp:833-856 sets these at the end of parse_interface;
+    # IDL::Interface declares them in Libraries/LibIDL/Types.h:319-326.
+    # main.cpp:60-69 sets fully_qualified_name. We compute them via
+    # resolver.compute_post_parse_names().
+    implemented_name: str = ""  # `[ImplementedAs=...]` value or `name`
+    namespaced_name: str = ""  # `<LegacyNamespace>.<name>` or `name`
+    fully_qualified_name: str = ""  # `<libweb_namespace>::<implemented_name>` or `implemented_name`
+    constructor_class: str = ""  # `<implemented_name>Constructor`
+    prototype_class: str = ""  # `<implemented_name>Prototype`
+    prototype_base_class: str = ""  # `<parent_name or "Object">Prototype`
+    namespace_class: str = ""  # `<name>Namespace`
+    global_mixin_class: str = ""  # `<name>GlobalMixin`
+
     # Marker for whether this Interface object holds *only* secondary
     # declarations (typedefs/enums/dicts/etc.) without a primary interface —
     # mirrors IDL::Interface::will_generate_code() reasoning at the parser layer.
