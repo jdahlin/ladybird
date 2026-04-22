@@ -505,27 +505,9 @@ def _generate_prototype_or_global_mixin_initialization(
                 '\n\n    @set_prototype@(&ensure_web_prototype<@prototype_base_class@>(realm, "@parent_name@"_fly_string));\n\n'
             )
 
-    # IDLGenerators.cpp:3957-3971 — constants on the prototype (only when
-    # not generating unforgeables).
-    if not generate_unforgeables:
-        from .types import generate_wrap_statement
-
-        for constant in interface.constants:
-            cg = g.fork()
-            cg.set("constant.name", constant.name)
-            generate_wrap_statement(
-                cg,
-                constant.value,
-                constant.type,
-                interface,
-                f"auto constant_{constant.name}_value =",
-            )
-            cg.append(
-                '\n    @define_direct_property@("@constant.name@"_utf16_fly_string, '
-                "constant_@constant.name@_value, JS::Attribute::Enumerable);\n"
-            )
-
     # IDLGenerators.cpp:3861-3941 — per-attribute define_native_accessor.
+    # (Note: in the C++ source, the attributes loop comes BEFORE the
+    # constants loop. Match that ordering.)
     from .types import attribute_callback_basename
 
     for attribute in interface.attributes:
@@ -585,6 +567,27 @@ def _generate_prototype_or_global_mixin_initialization(
     # Skipped at this rung: unscopable_object, overload_sets, attributes,
     # pair iterator, async iterator, setlike, maplike, named_property_*,
     # indexed_property_*. They all add lines here at later rungs.
+
+    # IDLGenerators.cpp:3957-3971 — constants on the prototype (only when
+    # not generating unforgeables). The C++ side emits constants AFTER
+    # attributes (and AFTER operations, when those land here).
+    if not generate_unforgeables:
+        from .types import generate_wrap_statement
+
+        for constant in interface.constants:
+            cg = g.fork()
+            cg.set("constant.name", constant.name)
+            generate_wrap_statement(
+                cg,
+                constant.value,
+                constant.type,
+                interface,
+                f"auto constant_{constant.name}_value =",
+            )
+            cg.append(
+                '\n    @define_direct_property@("@constant.name@"_utf16_fly_string, '
+                "constant_@constant.name@_value, JS::Attribute::Enumerable);\n"
+            )
 
     # IDLGenerators.cpp:4129-4133 — to_string_tag (only for No).
     if not generate_unforgeables:

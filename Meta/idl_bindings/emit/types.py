@@ -65,6 +65,10 @@ def is_primitive(type_: Type) -> bool:
     )
 
 
+def is_enum(type_: Type, interface: Interface) -> bool:
+    return type_.kind == "plain" and type_.name in interface.enumerations
+
+
 def generate_wrap_statement(
     generator: SourceGenerator,
     value: str,
@@ -113,7 +117,47 @@ def generate_wrap_statement(
         g.append("\n    @result_expression@ JS::Value(static_cast<@cpp_type@>(@value@));\n")
         return
 
+    if is_string(type_):
+        # IDLGenerators.cpp:2071-2083 — non-nullable, non-optional path.
+        g.append("\n    @result_expression@ JS::PrimitiveString::create(vm, @value@);\n")
+        return
+
+    if is_enum(type_, interface):
+        # IDLGenerators.cpp:2298-2305 — enum-typed values are wrapped via
+        # idl_enum_to_string from Bindings:: into a JS::PrimitiveString.
+        g.append("\n    @result_expression@ JS::PrimitiveString::create(vm, Bindings::idl_enum_to_string(@value@));\n")
+        return
+
+    if type_.kind == "plain" and type_.name in ("Location", "Uint8Array", "Uint8ClampedArray", "any"):
+        # IDLGenerators.cpp:2182-2185 — these all just pass through.
+        g.append("\n    @result_expression@ @value@;\n")
+        return
+
+    if type_.kind == "plain" and type_.name == "object":
+        # IDLGenerators.cpp:2337-2340.
+        g.append("\n    @result_expression@ JS::Value(const_cast<JS::Object*>(@value@));\n")
+        return
+
+    if type_.kind == "plain":
+        # IDLGenerators.cpp:2341-2345 — catch-all interface (platform-object)
+        # branch. The C++ side computes `cpp_type_name` for libweb namespaces
+        # (`Foo::Foo`) and JS builtin buffers (`JS::Foo`); for everything else
+        # it's just the name. We only handle the simple case here; the others
+        # arrive at later rungs.
+        g.set("type", _cpp_type_name(type_))
+        g.append("\n    @result_expression@ &const_cast<@type@&>(*@value@);\n")
+        return
+
     raise NotImplementedError(f"wrap statement for type {type_.name!r} (kind={type_.kind}) not supported yet")
+
+
+def _cpp_type_name(type_: Type) -> str:
+    """Subset of cpp_type_name (IDLGenerators.cpp:225-234).
+
+    Currently handles only the plain-name case. Libweb-namespace and
+    JS-builtin-buffer special cases come at later rungs.
+    """
+    return type_.name
 
 
 def attribute_callback_basename(attribute) -> str:
@@ -128,10 +172,17 @@ def attribute_callback_basename(attribute) -> str:
 
 
 def attribute_cpp_name(attribute) -> str:
-    """C++ name of the attribute getter — `[ImplementedAs]` or snake_case."""
+    """C++ name of the attribute getter — `[ImplementedAs]` or snake_case.
+
+    Mirrors IDLGenerators.cpp:4469-4474: if `[ImplementedAs]` is present
+    use it verbatim; otherwise snake_case the attribute name and route it
+    through make_input_acceptable_cpp (which handles C++ keyword clashes
+    like `operator` → `operator_`).
+    """
+    from .prototype import _make_input_acceptable_cpp
     from .prototype import _to_snakecase
 
     name = attribute.extended_attributes.get("ImplementedAs")
     if name:
         return name
-    return _to_snakecase(attribute.name).replace("-", "_")
+    return _make_input_acceptable_cpp(_to_snakecase(attribute.name))
