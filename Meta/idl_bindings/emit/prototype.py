@@ -456,7 +456,7 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
         is_nullable = bool(getattr(attribute.type, "nullable", False))
         # Supported reflect type slice.
         supported = (
-            (type_name == "DOMString" and not is_nullable and "Enumerated" not in attribute.extended_attributes)
+            (type_name == "DOMString" and not is_nullable)
             or type_name == "boolean"
             or type_name == "USVString"
             or type_name == "long"
@@ -492,6 +492,38 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
                 "\n"
                 "    auto retval = contentAttributeValue.value_or(String {});\n"
             )
+            if "Enumerated" in attribute.extended_attributes:
+                enum_type = attribute.extended_attributes["Enumerated"]
+                enumeration = interface.enumerations[enum_type]
+                mvd = enumeration.extended_attributes.get("MissingValueDefault", "")
+                ivd = enumeration.extended_attributes.get("InvalidValueDefault", "")
+                valid_values = ", ".join(f'"{v}"_string' for v in enumeration.values)
+                g.set("missing_enum_default_value", mvd)
+                g.set("invalid_enum_default_value", ivd)
+                g.set("valid_enum_values", valid_values)
+                g.append(
+                    "\n"
+                    "    auto did_set_to_missing_value = false;\n"
+                    "    if (!contentAttributeValue.has_value()) {\n"
+                    '        retval = "@missing_enum_default_value@"_string;\n'
+                    "        did_set_to_missing_value = true;\n"
+                    "    }\n"
+                    "\n"
+                    "    Array valid_values { @valid_enum_values@ };\n"
+                    "\n"
+                    "    auto has_keyword = false;\n"
+                    "    for (auto const& value : valid_values) {\n"
+                    "        if (value.equals_ignoring_ascii_case(retval)) {\n"
+                    "            has_keyword = true;\n"
+                    "            retval = value;\n"
+                    "            break;\n"
+                    "        }\n"
+                    "    }\n"
+                    "\n"
+                    "    if (!has_keyword && !did_set_to_missing_value)\n"
+                    '        retval = "@invalid_enum_default_value@"_string;\n'
+                    "    "
+                )
         elif type_name == "boolean":
             g.append('\n    auto retval = impl->has_attribute("@attribute.reflect_name@"_fly_string);\n')
         elif type_name == "long":
