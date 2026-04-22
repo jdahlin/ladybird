@@ -99,6 +99,7 @@ def generate_wrap_statement(
         g.append("\n    @result_expression@ JS::js_undefined();\n")
         return
 
+    # IDLGenerators.cpp:2017-2025 + the enum special case at 2244-2245.
     uses_value_access = is_optional and (
         type_.kind == "union"
         or is_string(type_)
@@ -107,6 +108,10 @@ def generate_wrap_statement(
         or type_.name in interface.enumerations
         or type_.name in interface.dictionaries
     )
+    # Enums also use .value() for *nullable* (not just optional), per
+    # IDLGenerators.cpp:2244 (set value to value.value() when nullable too).
+    if is_enum(type_, interface) and type_.nullable:
+        uses_value_access = True
     g.set("value_non_optional", f"{value}.value()" if uses_value_access else value)
     g.set("type", _cpp_type_name(type_))
 

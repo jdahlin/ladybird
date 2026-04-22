@@ -75,6 +75,7 @@ HTML/CloseWatcher.idl
 HTML/CommandEvent.idl
 HTML/DataTransferItem.idl
 HTML/ErrorEvent.idl
+HTML/EventSource.idl
 HTML/External.idl
 HTML/FormDataEvent.idl
 HTML/HashChangeEvent.idl
@@ -85,6 +86,7 @@ HTML/MediaError.idl
 HTML/MessageChannel.idl
 HTML/MimeType.idl
 HTML/NavigateEvent.idl
+HTML/NavigationCurrentEntryChangeEvent.idl
 HTML/NavigationDestination.idl
 HTML/NavigationHistoryEntry.idl
 HTML/NavigationType.idl
@@ -166,6 +168,7 @@ SVG/SVGFilterPrimitiveStandardAttributes.idl
 SVG/SVGFitToViewBox.idl
 SVG/SVGLength.idl
 SVG/SVGNumber.idl
+SVG/SVGTransform.idl
 SVG/SVGUnitTypes.idl
 SVG/SVGURIReference.idl
 TrustedTypes/TrustedTypePolicyFactory.idl
@@ -188,6 +191,7 @@ WebAudio/GainNode.idl
 WebAudio/OfflineAudioCompletionEvent.idl
 WebAudio/ScriptProcessorNode.idl
 WebAudio/StereoPannerNode.idl
+WebGL/Extensions/ANGLEInstancedArrays.idl
 WebGL/Extensions/EXTBlendMinMax.idl
 WebGL/Extensions/EXTColorBufferFloat.idl
 WebGL/Extensions/EXTRenderSnorm.idl
@@ -195,6 +199,7 @@ WebGL/Extensions/EXTTextureFilterAnisotropic.idl
 WebGL/Extensions/EXTTextureNorm16.idl
 WebGL/Extensions/OESElementIndexUint.idl
 WebGL/Extensions/OESStandardDerivatives.idl
+WebGL/Extensions/OESVertexArrayObject.idl
 WebGL/Extensions/WebGLCompressedTextureS3tc.idl
 WebGL/Extensions/WebGLCompressedTextureS3tcSrgb.idl
 WebGL/Extensions/WebGLVertexArrayObjectOES.idl

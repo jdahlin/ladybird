@@ -603,6 +603,27 @@ def _generate_prototype_or_global_mixin_initialization(
             "            "
         )
 
+    # IDLGenerators.cpp:3957-3971 — constants on the prototype (only when
+    # not generating unforgeables). The C++ source emits constants BEFORE
+    # the operations loop.
+    if not generate_unforgeables:
+        from .types import generate_wrap_statement
+
+        for constant in interface.constants:
+            cg = g.fork()
+            cg.set("constant.name", constant.name)
+            generate_wrap_statement(
+                cg,
+                constant.value,
+                constant.type,
+                interface,
+                f"auto constant_{constant.name}_value =",
+            )
+            cg.append(
+                '\n    @define_direct_property@("@constant.name@"_utf16_fly_string, '
+                "constant_@constant.name@_value, JS::Attribute::Enumerable);\n"
+            )
+
     # IDLGenerators.cpp:3973-4006 — per-operation define_native_function.
     overload_groups: dict[str, list] = {}
     for op in interface.operations:
@@ -626,34 +647,12 @@ def _generate_prototype_or_global_mixin_initialization(
         og = g.fork()
         og.set("function.name", name)
         og.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
-        # shortest_length across the overload set (per get_shortest_function_length).
         shortest = min(sum(1 for p in op2.parameters if not p.optional and not p.variadic) for op2 in group)
         og.set("function.length", str(shortest))
         og.append(
             "\n"
             '    @define_native_function@(realm, "@function.name@"_utf16_fly_string, @function.name:snakecase@, @function.length@, default_attributes);\n'
         )
-
-    # IDLGenerators.cpp:3957-3971 — constants on the prototype (only when
-    # not generating unforgeables). The C++ side emits constants AFTER
-    # attributes (and AFTER operations, when those land here).
-    if not generate_unforgeables:
-        from .types import generate_wrap_statement
-
-        for constant in interface.constants:
-            cg = g.fork()
-            cg.set("constant.name", constant.name)
-            generate_wrap_statement(
-                cg,
-                constant.value,
-                constant.type,
-                interface,
-                f"auto constant_{constant.name}_value =",
-            )
-            cg.append(
-                '\n    @define_direct_property@("@constant.name@"_utf16_fly_string, '
-                "constant_@constant.name@_value, JS::Attribute::Enumerable);\n"
-            )
 
     # IDLGenerators.cpp:4129-4133 — to_string_tag (only for No).
     if not generate_unforgeables:
