@@ -27,6 +27,7 @@ def generate_function(
     *,
     static: bool,
     generator: SourceGenerator,
+    interface_name_override: str | None = None,
 ) -> None:
     has_ce = "CEReactions" in function.extended_attributes
     if has_ce and static:
@@ -37,7 +38,8 @@ def generate_function(
 
     g = generator.fork()
     g.set("class_name", class_name)
-    g.set("interface_fully_qualified_name", interface.fully_qualified_name)
+    qualified = interface_name_override if interface_name_override is not None else interface.fully_qualified_name
+    g.set("interface_fully_qualified_name", qualified)
     g.set("function.name", function.name)
     snake = _make_input_acceptable_cpp(_to_snakecase(function.name))
     g.set("function.name:snakecase", snake)
@@ -48,7 +50,6 @@ def generate_function(
 
     cpp_name = function.extended_attributes.get("ImplementedAs") or snake
     g.set("function.cpp_name", cpp_name)
-    g.set("interface_fully_qualified_name", interface.fully_qualified_name)
 
     # IDLGenerators.cpp:2402-2407 — opener.
     g.append(

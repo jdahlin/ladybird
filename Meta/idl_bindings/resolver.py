@@ -74,6 +74,16 @@ class ImportResolver:
         rules at IDLParser.cpp:1296-1342.
         """
         imports: list[Interface] = []
+        # Mark this interface's file as in-flight so that any circular import
+        # chain leading back to it receives an empty stub (mirroring C++, where
+        # imports are resolved before the body is parsed, so a circular import
+        # sees an empty interface with no enumerations/dictionaries yet).
+        own_path = Path(interface.filename) if interface.filename else None
+        added_to_flight = False
+        if own_path and own_path not in self._in_flight and own_path not in self._resolved:
+            self._in_flight.add(own_path)
+            added_to_flight = True
+
         # `imported_modules` was populated by the parser with the raw path
         # strings from `#import <...>`. Resolve and replace.
         raw_paths = list(interface.imported_modules)
@@ -96,6 +106,21 @@ class ImportResolver:
 
         for imported in imports:
             self._merge_import(interface, imported)
+
+        if added_to_flight:
+            self._in_flight.discard(own_path)
+            # Fix up stubs left by circular imports that pointed back to this
+            # interface while it was in-flight.  The primary interface is not in
+            # _resolved (only dependencies go there), so temporarily register it
+            # so _fixup_stubs can find and replace any empty stubs with the real
+            # object.
+            was_in_resolved = own_path in self._resolved
+            if not was_in_resolved:
+                self._resolved[own_path] = interface
+            for cached in list(self._resolved.values()):
+                self._fixup_stubs(cached)
+            if not was_in_resolved:
+                del self._resolved[own_path]
         return imports
 
     def _resolve_path(self, raw: str, source_filename: str) -> Path:
@@ -109,7 +134,12 @@ class ImportResolver:
         if real_path in self._resolved:
             return self._resolved[real_path]
         if real_path in self._in_flight:
-            raise RuntimeError(f"Circular #import detected: {real_path}")
+            # C++ IDLParser.cpp resolves #imports BEFORE parsing the file body, so a
+            # circular import sees an empty (no enums/dicts yet) interface from the
+            # cache. Mimic that by returning a stub — the merge contributes nothing,
+            # matching the C++ behaviour where circular imports are no-ops for enum
+            # propagation.
+            return Interface(filename=str(real_path))
         self._in_flight.add(real_path)
         try:
             source = real_path.read_text()
@@ -130,9 +160,30 @@ class ImportResolver:
             # reads `implemented_name` etc. on imports when it walks the import
             # graph for #include emission.
             compute_post_parse_names(interface)
+            # Fix up any stubs in imported_interfaces that referred to files that
+            # were in-flight when they were imported but have since been cached.
+            self._fixup_stubs(interface)
         finally:
             self._in_flight.discard(real_path)
         return interface
+
+    def _fixup_stubs(self, interface: Interface) -> None:
+        """Replace stub Interface objects in imported_interfaces with the real
+        cached object, if available.
+
+        Stubs (name='') are created when a file is imported while it is still
+        being loaded (circular import). After the loading completes the real
+        interface is in _resolved, but the stub reference lingers in any
+        imported_interfaces list that was frozen at stub-creation time.
+        This fixup ensures the BFS in emit_includes_for_all_imports sees the
+        real interface (with the correct name) so it can emit the right
+        #include.
+        """
+        for i, imp in enumerate(interface.imported_interfaces):
+            if imp.filename and not imp.name:
+                real = self._resolved.get(Path(imp.filename))
+                if real is not None:
+                    interface.imported_interfaces[i] = real
 
     def _merge_import(self, target: Interface, imported: Interface) -> None:
         # Mirrors IDLParser.cpp:1296-1342. Each imported declaration kind is
@@ -165,10 +216,14 @@ class ImportResolver:
             target.partial_dictionaries.setdefault(name, []).extend(partials)
 
         for name, enumeration in imported.enumerations.items():
+            # Preserve the target's own original definition — only add if the
+            # target doesn't already have this enum as its own declaration.
+            # (Mirrors the C++ context.enumerations model where own_enumerations
+            # tracks which names this interface declared; imports only ADD new
+            # names, they never overwrite an is_original_definition=True entry.)
             existing = target.enumerations.get(name)
             if existing is not None and existing.is_original_definition:
                 continue
-            # Copy with is_original_definition=False.
             copy_enum = type(enumeration)(
                 extended_attributes=dict(enumeration.extended_attributes),
                 values=list(enumeration.values),
@@ -209,18 +264,38 @@ class ImportResolver:
                 target.includes_statements.append(stmt)
 
 
+def _merge_extended_attrs_into_member(member, partial_extended_attributes: dict):
+    """Merge partial interface extended attributes into a member copy.
+
+    Mirrors IDLParser.cpp:extend_with_partial_interface which calls
+    `function_copy.extended_attributes.update(partial.extended_attributes)`.
+    Returns a shallow copy with merged extended_attributes (existing values win).
+    """
+    import copy
+
+    m = copy.copy(member)
+    merged = dict(partial_extended_attributes)
+    merged.update(m.extended_attributes)  # member's own attrs override partial's
+    m.extended_attributes = merged
+    return m
+
+
 def _extend_with_partial_interface(target: Interface, partial: Interface) -> None:
     """Mirror IDL::Interface::extend_with_partial_interface.
 
     Concatenates the partial's members onto the target. Extended attributes
-    and stringifier state are merged conservatively.
+    of the partial interface are merged into each copied member, mirroring the
+    C++ behavior where `function_copy.extended_attributes.update(partial.extended_attributes)`.
     """
-    target.attributes.extend(partial.attributes)
-    target.static_attributes.extend(partial.static_attributes)
+    partial_ea = partial.extended_attributes
+    target.attributes.extend(_merge_extended_attrs_into_member(a, partial_ea) for a in partial.attributes)
+    target.static_attributes.extend(_merge_extended_attrs_into_member(a, partial_ea) for a in partial.static_attributes)
     target.constants.extend(partial.constants)
-    target.constructors.extend(partial.constructors)
-    target.operations.extend(partial.operations)
-    target.static_operations.extend(partial.static_operations)
+    target.constructors.extend(_merge_extended_attrs_into_member(c, partial_ea) for c in partial.constructors)
+    target.operations.extend(_merge_extended_attrs_into_member(op, partial_ea) for op in partial.operations)
+    target.static_operations.extend(
+        _merge_extended_attrs_into_member(op, partial_ea) for op in partial.static_operations
+    )
     if partial.has_stringifier and not target.has_stringifier:
         target.has_stringifier = True
         target.stringifier_attribute = partial.stringifier_attribute
@@ -352,11 +427,15 @@ def resolve_typedefs(interface: Interface) -> None:
 
     def resolve_type(type_: Type, attrs: dict[str, str] | None = None) -> Type:
         if type_.kind == "parameterized":
-            type_.parameters = [resolve_type(p) for p in type_.parameters]
-            return type_
+            new_params = [resolve_type(p) for p in type_.parameters]
+            result = _shallow_copy_type(type_)
+            result.parameters = new_params
+            return result
         if type_.kind == "union":
-            type_.union_member_types = [resolve_type(m) for m in type_.union_member_types]
-            return type_
+            new_members = [resolve_type(m) for m in type_.union_member_types]
+            result = _shallow_copy_type(type_)
+            result.union_member_types = new_members
+            return result
         # Plain.
         td = typedefs.get(type_.name)
         if td is None or td.type is None:
@@ -370,12 +449,12 @@ def resolve_typedefs(interface: Interface) -> None:
         if attrs is not None:
             for k, v in td.extended_attributes.items():
                 attrs.setdefault(k, v)
-        # Mirror IDLParser.cpp:1213-1214 — share the typedef's stored Type
-        # instance and overwrite its nullable flag in place. This is how the
-        # C++ side behaves (NonnullRefPtr<Type const> with const_cast); the
-        # last use-site to resolve a given typedef wins for the nullable bit
-        # on the shared instance, which downstream codegen reads when wrapping.
-        new_type = td.type
+        # Copy the typedef's stored Type so we don't mutate the shared cached
+        # object — the shared resolver caches imported Interface objects and
+        # their Type instances are referenced by many primary IDL files.
+        # Mutating in place (as the C++ single-run tool does) would corrupt
+        # the cache for subsequent files.
+        new_type = _shallow_copy_type(td.type)
         new_type.nullable = nullable
         new_type = resolve_type(new_type, attrs)
         return new_type

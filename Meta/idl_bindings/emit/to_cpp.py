@@ -131,6 +131,17 @@ def generate_to_cpp(
             recursion_depth=recursion_depth,
         )
         return
+    if type_.kind == "parameterized" and type_.name == "record":
+        _generate_to_record(
+            g,
+            type_,
+            js_name,
+            js_suffix,
+            accept_cpp,
+            interface,
+            recursion_depth=recursion_depth,
+        )
+        return
     if type_.kind == "union":
         _generate_to_union(
             parameter,
@@ -149,6 +160,18 @@ def generate_to_cpp(
     callback_iface = _find_callback_interface(interface, type_.name)
     if callback_iface is not None:
         _generate_to_callback_interface(g, type_, callback_iface)
+        return
+    if type_.name == "Promise":
+        # IDLGenerators.cpp:880-891 — Promise: wrap JS value in a new promise capability.
+        g.append(
+            "\n"
+            "    // 1. Let promiseCapability be ? NewPromiseCapability(%Promise%).\n"
+            "    auto promise_capability = TRY(JS::new_promise_capability(vm, realm.intrinsics().promise_constructor()));\n"
+            "    // 2. Perform ? Call(promiseCapability.[[Resolve]], undefined, « V »).\n"
+            "    TRY(JS::call(vm, *promise_capability->resolve(), JS::js_undefined(), @js_name@@js_suffix@));\n"
+            "    // 3. Return promiseCapability.\n"
+            "    auto @cpp_name@ = GC::make_root(promise_capability);\n"
+        )
         return
     if type_.kind == "plain" and not type_.name.startswith("("):
         # Bare interface name → platform object.
@@ -801,10 +824,27 @@ def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
         return (_INTEGER_TO_VECTOR_TYPE[t.name], "Vector")
     if t.name == "any":
         return ("JS::Value", "GC::RootVector")
+    if t.name == "object":
+        return ("GC::Root<JS::Object>", "Vector")
+    if t.name == "BufferSource":
+        return ("GC::Root<WebIDL::BufferSource>", "GC::RootVector")
+    if t.name == "ArrayBufferView":
+        return ("GC::Root<WebIDL::ArrayBufferView>", "GC::RootVector")
+    if t.name == "Promise":
+        return ("GC::Root<WebIDL::Promise>", "GC::RootVector")
     if t.kind == "union":
         from .types import union_type_to_variant
 
         return (union_type_to_variant(t, interface), "Vector")
+    if t.kind == "parameterized" and t.name in ("sequence", "FrozenArray"):
+        elem_cpp, elem_storage = _idl_type_name_to_cpp_type(t.parameters[0], interface)
+        if elem_storage == "GC::RootVector":
+            return ("GC::RootVector", "Vector")
+        return (f"Vector<{elem_cpp}>", "Vector")
+    if t.kind == "parameterized" and t.name == "record":
+        k_cpp, _ = _idl_type_name_to_cpp_type(t.parameters[0], interface)
+        v_cpp, _ = _idl_type_name_to_cpp_type(t.parameters[1], interface)
+        return (f"OrderedHashMap<{k_cpp}, {v_cpp}>", "Vector")
     raise NotImplementedError(f"idl_type_name_to_cpp_type for {t.name!r}")
 
 
@@ -1370,3 +1410,74 @@ def _is_numeric_literal(s: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _generate_to_record(
+    g,
+    type_,
+    js_name: str,
+    js_suffix: str,
+    cpp_name: str,
+    interface: Interface,
+    *,
+    recursion_depth: int,
+) -> None:
+    """Port of generate_record_to_cpp (IDLGenerators.cpp:1115-1182)."""
+    from ..ast import Parameter as _Parameter
+
+    rg = g.fork()
+    rg.set("recursion_depth", str(recursion_depth))
+    record_cpp, _ = _idl_type_name_to_cpp_type(type_, interface)
+    rg.set("record.type", record_cpp)
+    if recursion_depth == 0:
+        rg.append(
+            "\n"
+            "    if (!@js_name@@js_suffix@.is_object())\n"
+            "        return vm.throw_completion<JS::TypeError>(JS::ErrorType::NotAnObject, @js_name@@js_suffix@);\n"
+            "\n"
+            "    auto& @js_name@@js_suffix@_object = @js_name@@js_suffix@.as_object();\n"
+        )
+    rg.append(
+        "\n"
+        "    @record.type@ @cpp_name@;\n"
+        "\n"
+        "    auto record_keys@recursion_depth@ = TRY(@js_name@@js_suffix@_object.internal_own_property_keys());\n"
+        "\n"
+        "    for (auto& key@recursion_depth@ : record_keys@recursion_depth@) {\n"
+        "        auto property_key@recursion_depth@ = MUST(JS::PropertyKey::from_value(vm, key@recursion_depth@));\n"
+        "\n"
+        "        auto descriptor@recursion_depth@ = TRY(@js_name@@js_suffix@_object.internal_get_own_property(property_key@recursion_depth@));\n"
+        "\n"
+        "        if (!descriptor@recursion_depth@.has_value() || !descriptor@recursion_depth@->enumerable.has_value() || !descriptor@recursion_depth@->enumerable.value())\n"
+        "            continue;\n"
+    )
+    key_param = _Parameter(type=type_.parameters[0], name=cpp_name, extended_attributes={})
+    generate_to_cpp(
+        key_param,
+        "key",
+        str(recursion_depth),
+        f"typed_key{recursion_depth}",
+        interface,
+        rg,
+        optional=False,
+        optional_default_value=None,
+        variadic=False,
+        recursion_depth=recursion_depth + 1,
+    )
+    rg.append(
+        "\n        auto value@recursion_depth@ = TRY(@js_name@@js_suffix@_object.get(property_key@recursion_depth@));\n"
+    )
+    value_param = _Parameter(type=type_.parameters[1], name=cpp_name, extended_attributes={})
+    generate_to_cpp(
+        value_param,
+        "value",
+        str(recursion_depth),
+        f"typed_value{recursion_depth}",
+        interface,
+        rg,
+        optional=False,
+        optional_default_value=None,
+        variadic=False,
+        recursion_depth=recursion_depth + 1,
+    )
+    rg.append("\n        @cpp_name@.set(typed_key@recursion_depth@, typed_value@recursion_depth@);\n    }\n")

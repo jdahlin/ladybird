@@ -107,13 +107,28 @@ def emit_includes_for_all_imports(
     is_iterator: bool = False,
     is_async_iterator: bool = False,
 ) -> None:
-    # IDLGenerators.cpp:465-497. BFS over imported_interfaces; emit one
-    # #include per interface that will_generate_code(). The Interface seen
-    # at the head of the BFS is always emitted (it's the leaf for which
-    # bindings are being generated); later interfaces are emitted only when
-    # they will themselves produce a header.
-    seen: set[str] = set()
-    queue: deque[Interface] = deque([interface])
+    # IDLGenerators.cpp:465-497. Mirrors the post-f25bfd747a structure:
+    # - The main interface is emitted BEFORE the BFS (if will_generate_code()).
+    # - Imported modules are enqueued in BFS order, but an include is only
+    #   generated for modules that have a primary interface (non-empty name).
+    #   This mirrors the C++ check `module->interface.has_value()`, which is
+    #   only set when `!interface.name.is_empty()` (IDLParser.cpp:1487-1488).
+    #   Dict/enum-only files (no primary interface) are traversed for their
+    #   sub-imports but do NOT themselves generate an #include via the BFS.
+    # Mirrors the post-f25bfd747a C++ structure:
+    # 1. Mark main interface as visited, emit its include if will_generate_code().
+    # 2. BFS over imports. For imported modules, only emit an include if the
+    #    file has a primary interface (non-empty name). Dict/enum-only files
+    #    (like QueuingStrategy.idl) are traversed for sub-imports but do not
+    #    themselves generate an #include. This mirrors the C++ check
+    #    `module->interface.has_value()`, which is only set for non-empty-name
+    #    interfaces (IDLParser.cpp:1487-1488).
+    seen: set[str] = {interface.filename}
+    queue: deque[Interface] = deque(interface.imported_interfaces)
+
+    if _will_generate_code(interface):
+        _generate_include_for_interface(generator, interface)
+
     while queue:
         i = queue.popleft()
         if i.filename in seen:
@@ -122,12 +137,19 @@ def emit_includes_for_all_imports(
         for imp in i.imported_interfaces:
             if imp.filename not in seen:
                 queue.append(imp)
-        if not _will_generate_code(i):
+        if not i.name:
             continue
         _generate_include_for_interface(generator, i)
-    # Iterator/async-iterator includes are not yet supported (rungs 27/28).
-    assert not is_iterator
-    assert not is_async_iterator
+    if is_iterator:
+        iterator_path = interface.fully_qualified_name.replace("::", "/") + "Iterator"
+        ig = generator.fork()
+        ig.set("iterator_class.path", iterator_path)
+        ig.append("\n#   include <LibWeb/@iterator_class.path@.h>\n")
+    if is_async_iterator:
+        iterator_path = interface.fully_qualified_name.replace("::", "/") + "AsyncIterator"
+        ig = generator.fork()
+        ig.set("iterator_class.path", iterator_path)
+        ig.append("\n#   include <LibWeb/@iterator_class.path@.h>\n")
 
 
 def generate_implementation_prologue(interface: Interface, generator: SourceGenerator) -> None:

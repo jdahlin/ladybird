@@ -320,7 +320,8 @@ def generate_wrap_statement(
     # IDLGenerators.cpp:2244 (set value to value.value() when nullable too).
     if is_enum(type_, interface) and type_.nullable:
         uses_value_access = True
-    g.set("value_non_optional", f"{value}.value()" if uses_value_access else value)
+    value_non_optional_str = f"{value}.value()" if uses_value_access else value
+    g.set("value_non_optional", value_non_optional_str)
     g.set("type", _cpp_type_name(type_))
 
     # Compound wrap: if nullable or optional (except union), open an
@@ -415,10 +416,12 @@ def generate_wrap_statement(
     if type_.kind == "plain" and type_.name in interface.dictionaries:
         # IDLGenerators.cpp:2273-2336 — wrap a struct into a JS object by
         # iterating each member and create_data_property'ing it.
+        # Use value_non_optional_str so optional outer values are unwrapped
+        # before accessing their members (mirrors C++: value_non_optional + "." + member_name).
         _generate_dictionary_wrap(
             g,
             type_,
-            value,
+            value_non_optional_str,
             interface,
             recursion_depth,
             iteration_index,
@@ -485,6 +488,42 @@ def generate_wrap_statement(
     if type_.kind == "plain" and type_.name in ("ArrayBufferView", "BufferSource"):
         # IDLGenerators.cpp:2190-2193.
         g.append("\n    @result_expression@ JS::Value(@value_non_optional@->raw_object());\n")
+        _close_wrap_if(g, type_, is_optional, wrap_in_if)
+        return
+
+    if type_.kind == "parameterized" and type_.name == "record":
+        # IDLGenerators.cpp:2133-2165 — record<K, V> to JS object.
+        value_type = type_.parameters[1]
+        g.append(
+            "\n"
+            "    {\n"
+            "        // An IDL record<…> value D is converted to a JavaScript value as follows:\n"
+            "        // 1. Let result be OrdinaryObjectCreate(%Object.prototype%).\n"
+            "        auto result = JS::Object::create(realm, realm.intrinsics().object_prototype());\n"
+            "\n"
+            "        // 2. For each key → value of D:\n"
+            "        for (auto const& [key, value] : @value_non_optional@) {\n"
+            "            // 1. Let jsKey be key converted to a JavaScript value.\n"
+            "            auto js_key = JS::PropertyKey { Utf16FlyString::from_utf8(key) };\n"
+            "\n"
+            "            // 2. Let jsValue be value converted to a JavaScript value.\n"
+        )
+        generate_wrap_statement(
+            g, "value", value_type, interface, "auto js_value =", recursion_depth=recursion_depth + 1
+        )
+        g.append(
+            "\n"
+            "\n"
+            "            // 3. Let created be ! CreateDataProperty(result, jsKey, jsValue).\n"
+            "            bool created = MUST(result->create_data_property(js_key, js_value));\n"
+            "\n"
+            "            // 4. Assert: created is true.\n"
+            "            VERIFY(created);\n"
+            "        }\n"
+            "\n"
+            "        @result_expression@ result;\n"
+            "    }\n"
+        )
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 

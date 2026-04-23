@@ -55,6 +55,10 @@ def generate_header(interface: Interface) -> str:
 
 
 def generate_implementation(interface: Interface) -> str:
+    from .to_cpp import _DICTIONARY_INDEX
+
+    _DICTIONARY_INDEX[0] = 0
+
     builder = StringBuilder()
     g = SourceGenerator(builder)
 

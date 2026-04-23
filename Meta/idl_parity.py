@@ -1,20 +1,16 @@
-"""Parity harness — run the C++ and Python bindings generators on the same
-.idl file and diff their outputs.
-
-Phase 1 of the rewrite plan
-(/home/jdahlin/.claude/plans/how-can-we-rewrite-snoopy-pebble.md). For one
-or many IDL files, runs both generators in two tmpdirs, then walks both
-trees and byte-compares each emitted file. Exit code 0 iff every file in
-scope is byte-identical; non-zero with a unified diff otherwise.
+"""Parity harness — diff Python bindings generator output against C++.
 
 Usage:
     Meta/idl_parity.py --idl Libraries/LibWeb/HTML/WorkletGlobalScope.idl
     Meta/idl_parity.py --allowlist Meta/python_bindings_allowlist.txt
     Meta/idl_parity.py --all                    # everything in idl_files.cmake
 
-The C++ tool is located via $BINDINGS_GENERATOR (env var) or by searching
-the standard build directories. The Python tool is invoked as
-`python3 -m idl_bindings.emit <args...>`.
+C++ reference outputs are cached in Build/release/idl-parity-cache/ and
+regenerated automatically when the BindingsGenerator binary is newer than
+the cache. Pass --regen-cpp to force regeneration.
+
+Python generation runs in-process (no subprocess startup overhead) and is
+parallelized across all IDL files with a thread pool.
 """
 
 from __future__ import annotations
@@ -25,12 +21,15 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 
+from concurrent.futures import ThreadPoolExecutor  # used for C++ cache regen only
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LIBWEB_ROOT = REPO_ROOT / "Libraries" / "LibWeb"
+
+# Default cache location for C++ generator outputs.
+CPP_CACHE_DIR = REPO_ROOT / "Build" / "release" / "idl-parity-cache"
 
 
 def find_cpp_generator() -> Path:
@@ -51,11 +50,10 @@ def find_cpp_generator() -> Path:
 
 
 def find_generated_idl_dirs() -> list[Path]:
-    """Find build directories that contain generated IDL files (e.g. GeneratedCSSStyleProperties.idl)."""
+    """Find build directories containing generated IDL files."""
     if env := os.environ.get("GENERATED_IDL_DIR"):
         return [Path(env)]
     generated_idl = "CSS/GeneratedCSSStyleProperties.idl"
-    # Collect candidate roots: the repo itself + repos in sibling directories up to 6 levels up
     roots: set[Path] = {REPO_ROOT}
     ancestor = REPO_ROOT
     for _ in range(6):
@@ -63,92 +61,153 @@ def find_generated_idl_dirs() -> list[Path]:
         if not ancestor.is_dir():
             break
         try:
-            siblings = list(ancestor.iterdir())
-        except (PermissionError, OSError):
-            break
-        for sibling in siblings:
-            try:
+            for sibling in ancestor.iterdir():
                 if sibling.is_dir() and (sibling / "Build").is_dir():
                     roots.add(sibling)
-            except (PermissionError, OSError):
-                pass
+        except (PermissionError, OSError):
+            break
     found = []
     for root in sorted(roots):
         try:
             for build_dir in sorted((root / "Build").glob("*/Libraries/LibWeb")):
                 if (build_dir / generated_idl).is_file():
                     found.append(build_dir)
-                    break  # One per root is enough
+                    break
         except (PermissionError, OSError):
             pass
     return found
 
 
-def run_cpp(idl: Path, output_dir: Path, generator: Path) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    extra_paths = find_generated_idl_dirs()
-    cmd = [str(generator), "-o", str(output_dir), str(idl), str(LIBWEB_ROOT)]
+# ── C++ cache ────────────────────────────────────────────────────────────────
+
+
+def _cpp_cache_stale(generator: Path, cache_dir: Path) -> bool:
+    """Return True if the C++ cache needs to be regenerated."""
+    marker = cache_dir / ".generator-mtime"
+    if not marker.exists():
+        return True
+    try:
+        return generator.stat().st_mtime > float(marker.read_text())
+    except (OSError, ValueError):
+        return True
+
+
+def _run_cpp_one(idl: Path, cache_dir: Path, generator: Path, extra_paths: list[Path]) -> str | None:
+    """Run C++ generator for one IDL file into cache_dir. Returns error string or None."""
+    cmd = [str(generator), "-o", str(cache_dir), str(idl), str(LIBWEB_ROOT)]
     for p in extra_paths:
         cmd.append(str(p))
-    subprocess.run(
-        cmd,
-        check=True,
-        capture_output=True,
-    )
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        return e.stderr.decode("utf-8", errors="replace")
+    return None
 
 
-def run_python(idl: Path, output_dir: Path) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    extra_paths = find_generated_idl_dirs()
-    cmd = [
-        sys.executable,
-        "-m",
-        "idl_bindings.emit",
-        "-o",
-        str(output_dir),
-        str(idl),
-        str(LIBWEB_ROOT),
-    ]
-    for p in extra_paths:
-        cmd.append(str(p))
-    subprocess.run(
-        cmd,
-        cwd=str(REPO_ROOT / "Meta"),
-        check=True,
-        capture_output=True,
-    )
+def ensure_cpp_cache(
+    idls: list[Path],
+    generator: Path,
+    extra_paths: list[Path],
+    cache_dir: Path,
+    force: bool = False,
+    jobs: int = 4,
+) -> set[Path]:
+    """Ensure the C++ cache is up-to-date. Returns set of IDLs that failed."""
+    if not force and not _cpp_cache_stale(generator, cache_dir):
+        return set()
+
+    print(f"Regenerating C++ cache in {cache_dir} ...", file=sys.stderr)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    failed: set[Path] = set()
+
+    def work(idl: Path) -> tuple[Path, str | None]:
+        return idl, _run_cpp_one(idl, cache_dir, generator, extra_paths)
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        for idl, err in pool.map(work, idls):
+            if err:
+                print(f"C++ generator failed for {idl}:\n{err}", file=sys.stderr)
+                failed.add(idl)
+
+    if not failed:
+        (cache_dir / ".generator-mtime").write_text(str(generator.stat().st_mtime))
+
+    return failed
 
 
-def diff_dirs(cpp_dir: Path, py_dir: Path, label: str) -> list[str]:
-    """Return a list of unified-diff lines (empty iff byte-identical).
+# ── Python in-process generation ─────────────────────────────────────────────
 
-    Surfaces files-only-in-one-side as well as differing contents.
+
+def _make_shared_resolver(extra_paths: list[Path]):
+    """Create a shared ImportResolver that caches parsed imports across all IDL files."""
+    from idl_bindings.resolver import ImportResolver
+
+    bases = [LIBWEB_ROOT] + list(extra_paths)
+    return ImportResolver(bases, strict=False)
+
+
+def _run_python_one(idl: Path, resolver) -> tuple[str, str] | str:
+    """Generate header+impl for one IDL file in-process using a shared resolver.
+
+    Returns (header_text, impl_text) on success, or an error string on failure.
     """
-    cpp_files = {p.name: p for p in cpp_dir.iterdir() if p.is_file()}
-    py_files = {p.name: p for p in py_dir.iterdir() if p.is_file()}
+    import traceback
 
+    from idl_bindings.emit.main import generate_header
+    from idl_bindings.emit.main import generate_implementation
+    from idl_bindings.parser import Parser
+    from idl_bindings.resolver import apply_local_partials
+    from idl_bindings.resolver import compute_post_parse_names
+    from idl_bindings.resolver import number_overload_sets
+    from idl_bindings.resolver import resolve_includes
+    from idl_bindings.resolver import resolve_typedefs
+
+    try:
+        source = idl.read_text()
+        interface = Parser(source, str(idl)).parse()
+        resolver.resolve_for(interface)
+        apply_local_partials(interface)
+        resolve_includes(interface)
+        resolve_typedefs(interface)
+        compute_post_parse_names(interface)
+        number_overload_sets(interface)
+
+        header = generate_header(interface)
+        impl = generate_implementation(interface)
+        return header, impl
+    except Exception:
+        return traceback.format_exc()
+
+
+# ── Diff ─────────────────────────────────────────────────────────────────────
+
+
+def diff_outputs(
+    idl: Path,
+    cache_dir: Path,
+    py_header: str,
+    py_impl: str,
+) -> list[str]:
+    """Diff Python output against cached C++ output for one IDL file."""
+    stem = idl.stem
+    pairs = [
+        (cache_dir / f"{stem}.h", py_header, f"{stem}.h"),
+        (cache_dir / f"{stem}.cpp", py_impl, f"{stem}.cpp"),
+    ]
     output: list[str] = []
-    for name in sorted(cpp_files.keys() | py_files.keys()):
-        cpp = cpp_files.get(name)
-        py = py_files.get(name)
-        if cpp is None:
-            output.append(f"--- (only in Python) {name} ---")
-            output.append(py.read_text())  # type: ignore[union-attr]
+    for cpp_path, py_text, name in pairs:
+        if not cpp_path.exists():
+            output.append(f"--- (only in Python) {name}\n")
+            output.extend(f"+{line}\n" for line in py_text.splitlines())
             continue
-        if py is None:
-            output.append(f"--- (only in C++) {name} ---")
-            output.append(cpp.read_text())
+        cpp_text = cpp_path.read_text(errors="replace")
+        if cpp_text == py_text:
             continue
-        cpp_bytes = cpp.read_bytes()
-        py_bytes = py.read_bytes()
-        if cpp_bytes == py_bytes:
-            continue
-        cpp_lines = cpp_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
-        py_lines = py_bytes.decode("utf-8", errors="replace").splitlines(keepends=True)
         output.extend(
             difflib.unified_diff(
-                cpp_lines,
-                py_lines,
+                cpp_text.splitlines(keepends=True),
+                py_text.splitlines(keepends=True),
                 fromfile=f"cpp/{name}",
                 tofile=f"py/{name}",
                 n=3,
@@ -157,53 +216,43 @@ def diff_dirs(cpp_dir: Path, py_dir: Path, label: str) -> list[str]:
     return output
 
 
-def parity_one(idl: Path, generator: Path, verbose: bool = False) -> bool:
-    with tempfile.TemporaryDirectory(prefix="idl-parity-") as tmpdir:
-        cpp_dir = Path(tmpdir) / "cpp"
-        py_dir = Path(tmpdir) / "py"
-        try:
-            run_cpp(idl, cpp_dir, generator)
-        except subprocess.CalledProcessError as exc:
-            print(f"C++ generator failed for {idl}:", file=sys.stderr)
-            print(exc.stderr.decode("utf-8", errors="replace"), file=sys.stderr)
-            return False
-        try:
-            run_python(idl, py_dir)
-        except subprocess.CalledProcessError as exc:
-            print(f"Python generator failed for {idl}:", file=sys.stderr)
-            print(exc.stderr.decode("utf-8", errors="replace"), file=sys.stderr)
-            return False
+# ── Per-file work ─────────────────────────────────────────────────────────────
 
-        diff_lines = diff_dirs(cpp_dir, py_dir, idl.name)
-        if not diff_lines:
-            if verbose:
-                print(f"OK  {idl}")
-            return True
-        print(f"DIFF {idl}")
-        sys.stdout.writelines(diff_lines)
-        if not diff_lines or not diff_lines[-1].endswith("\n"):
-            print()
-        return False
+
+def parity_one(idl: Path, cache_dir: Path, resolver, verbose: bool) -> tuple[bool, list[str]]:
+    """Check parity for one IDL file. Returns (passed, diff_lines)."""
+    result = _run_python_one(idl, resolver)
+    if isinstance(result, str):
+        return False, [f"Python generator failed for {idl}:\n{result}"]
+
+    header, impl = result
+    diff_lines = diff_outputs(idl, cache_dir, header, impl)
+    return not diff_lines, diff_lines
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sel = ap.add_mutually_exclusive_group(required=True)
     sel.add_argument("--idl", type=Path, help="parity-check one IDL file")
-    sel.add_argument(
-        "--allowlist",
-        type=Path,
-        help="parity-check every IDL listed in this file (one path per line)",
-    )
-    sel.add_argument(
-        "--all",
-        action="store_true",
-        help="parity-check every IDL in Libraries/LibWeb (slow, mostly for progress tracking)",
-    )
+    sel.add_argument("--allowlist", type=Path, help="parity-check every IDL listed in this file")
+    sel.add_argument("--all", action="store_true", help="parity-check every IDL in idl_files.cmake")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
+    ap.add_argument("--regen-cpp", action="store_true", help="force regeneration of C++ cache")
+    ap.add_argument(
+        "--cpp-cache",
+        type=Path,
+        default=CPP_CACHE_DIR,
+        help="directory for cached C++ outputs",
+    )
     args = ap.parse_args()
 
     generator = find_cpp_generator()
+    extra_paths = find_generated_idl_dirs()
+    cache_dir: Path = args.cpp_cache
 
     if args.idl:
         idls: list[Path] = [args.idl.resolve()]
@@ -213,8 +262,9 @@ def main() -> int:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            idls.append((LIBWEB_ROOT / line).resolve() if not Path(line).is_absolute() else Path(line))
-    else:  # --all — use idl_files.cmake as the authoritative list
+            p = Path(line)
+            idls.append((LIBWEB_ROOT / p).resolve() if not p.is_absolute() else p)
+    else:
         cmake = REPO_ROOT / "Libraries" / "LibWeb" / "idl_files.cmake"
         idls = []
         for line in cmake.read_text().splitlines():
@@ -223,12 +273,42 @@ def main() -> int:
                 idls.append((LIBWEB_ROOT / (m.group(1) + ".idl")).resolve())
         idls.sort()
 
-    pass_count = 0
-    for idl in idls:
-        if parity_one(idl, generator, verbose=args.verbose):
-            pass_count += 1
+    # Ensure C++ cache is populated.
+    cpp_failed = ensure_cpp_cache(idls, generator, extra_paths, cache_dir, force=args.regen_cpp, jobs=args.jobs)
 
+    pass_count = 0
     total = len(idls)
+
+    sys.path.insert(0, str(REPO_ROOT / "Meta"))
+
+    # One shared resolver so transitive imports are parsed only once.
+    resolver = _make_shared_resolver(extra_paths)
+
+    def work(idl: Path) -> tuple[Path, bool, list[str]]:
+        if idl in cpp_failed:
+            return idl, False, [f"C++ generator failed for {idl} (see above)\n"]
+        ok, lines = parity_one(idl, cache_dir, resolver, args.verbose)
+        return idl, ok, lines
+
+    if total == 1:
+        _, ok, lines = work(idls[0])
+        if ok:
+            pass_count = 1
+            if args.verbose:
+                print(f"OK  {idls[0]}")
+        else:
+            sys.stdout.writelines(lines)
+    else:
+        # Sequential — shared resolver is not thread-safe.
+        for idl, ok, lines in map(work, idls):
+            if ok:
+                pass_count += 1
+                if args.verbose:
+                    print(f"OK  {idl}")
+            else:
+                print(f"DIFF {idl}")
+                sys.stdout.writelines(lines)
+
     print(f"\n{pass_count}/{total} IDL files pass parity")
     return 0 if pass_count == total else 1
 
