@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -49,10 +50,48 @@ def find_cpp_generator() -> Path:
     )
 
 
+def find_generated_idl_dirs() -> list[Path]:
+    """Find build directories that contain generated IDL files (e.g. GeneratedCSSStyleProperties.idl)."""
+    if env := os.environ.get("GENERATED_IDL_DIR"):
+        return [Path(env)]
+    generated_idl = "CSS/GeneratedCSSStyleProperties.idl"
+    # Collect candidate roots: the repo itself + repos in sibling directories up to 6 levels up
+    roots: set[Path] = {REPO_ROOT}
+    ancestor = REPO_ROOT
+    for _ in range(6):
+        ancestor = ancestor.parent
+        if not ancestor.is_dir():
+            break
+        try:
+            siblings = list(ancestor.iterdir())
+        except (PermissionError, OSError):
+            break
+        for sibling in siblings:
+            try:
+                if sibling.is_dir() and (sibling / "Build").is_dir():
+                    roots.add(sibling)
+            except (PermissionError, OSError):
+                pass
+    found = []
+    for root in sorted(roots):
+        try:
+            for build_dir in sorted((root / "Build").glob("*/Libraries/LibWeb")):
+                if (build_dir / generated_idl).is_file():
+                    found.append(build_dir)
+                    break  # One per root is enough
+        except (PermissionError, OSError):
+            pass
+    return found
+
+
 def run_cpp(idl: Path, output_dir: Path, generator: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    extra_paths = find_generated_idl_dirs()
+    cmd = [str(generator), "-o", str(output_dir), str(idl), str(LIBWEB_ROOT)]
+    for p in extra_paths:
+        cmd.append(str(p))
     subprocess.run(
-        [str(generator), "-o", str(output_dir), str(idl), str(LIBWEB_ROOT)],
+        cmd,
         check=True,
         capture_output=True,
     )
@@ -60,16 +99,20 @@ def run_cpp(idl: Path, output_dir: Path, generator: Path) -> None:
 
 def run_python(idl: Path, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    extra_paths = find_generated_idl_dirs()
+    cmd = [
+        sys.executable,
+        "-m",
+        "idl_bindings.emit",
+        "-o",
+        str(output_dir),
+        str(idl),
+        str(LIBWEB_ROOT),
+    ]
+    for p in extra_paths:
+        cmd.append(str(p))
     subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "idl_bindings.emit",
-            "-o",
-            str(output_dir),
-            str(idl),
-            str(LIBWEB_ROOT),
-        ],
+        cmd,
         cwd=str(REPO_ROOT / "Meta"),
         check=True,
         capture_output=True,
@@ -171,8 +214,14 @@ def main() -> int:
             if not line or line.startswith("#"):
                 continue
             idls.append((LIBWEB_ROOT / line).resolve() if not Path(line).is_absolute() else Path(line))
-    else:  # --all
-        idls = sorted(LIBWEB_ROOT.rglob("*.idl"))
+    else:  # --all — use idl_files.cmake as the authoritative list
+        cmake = REPO_ROOT / "Libraries" / "LibWeb" / "idl_files.cmake"
+        idls = []
+        for line in cmake.read_text().splitlines():
+            m = re.match(r"\s*libweb_js_bindings\(([^)]+)\)", line)
+            if m:
+                idls.append((LIBWEB_ROOT / (m.group(1) + ".idl")).resolve())
+        idls.sort()
 
     pass_count = 0
     for idl in idls:
