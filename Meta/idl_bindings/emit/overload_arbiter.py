@@ -11,6 +11,9 @@ from dataclasses import field
 
 from ..ast import Interface
 from ..ast import Type
+from .naming import _make_input_acceptable_cpp
+from .naming import _to_snakecase
+from .types import _get_active_context
 
 
 @dataclass
@@ -129,9 +132,6 @@ def generate_overload_arbiter(
     `overloads` is a list of either Constructor or Operation objects (the
     fields used here — parameters — are common to both).
     """
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
-
     g = generator.fork()
     if is_constructor:
         g.set("constructor_class", class_name)
@@ -139,9 +139,7 @@ def generate_overload_arbiter(
         g.set("class_name", class_name)
     g.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(overload_set_key)))
 
-    from .types import _get_active_context as _gac_oa
-
-    _ctx_oa = _gac_oa()
+    _ctx_oa = _get_active_context()
 
     def _is_dictionary_type(name: str) -> bool:
         if name in interface.dictionaries:

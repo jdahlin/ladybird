@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from ..ast import Interface
 from ..ast import Type
+from ..resolver import cpp_namespace_for_module_path
+from .naming import _make_input_acceptable_cpp
+from .naming import _to_snakecase
 from .source_generator import SourceGenerator
 
 # Module-level context set during batch generation.  The generator sets this
@@ -422,8 +425,6 @@ def generate_wrap_statement(
         return
 
     # IDLGenerators.cpp:2269-2272 — callback interface.
-    from .to_cpp import _find_callback_interface
-
     if _find_callback_interface(interface, type_.name) is not None:
         g.append("\n  @result_expression@ @value@->callback().callback;\n")
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
@@ -664,8 +665,6 @@ def _cpp_type_name(type_: Type) -> str:
     Also mirrors interface_cpp_type_name(Context, Type) which special-cases
     WindowProxy (IDLGenerators.cpp:68-80).
     """
-    from ..resolver import cpp_namespace_for_module_path
-
     # WindowProxy is not declared in an IDL file; always emit the hard-coded FQN.
     # Mirrors IDLGenerators.cpp:69-70.
     if type_.name == "WindowProxy":
@@ -687,6 +686,37 @@ def _cpp_type_name(type_: Type) -> str:
     return type_.name
 
 
+def _find_callback_interface(interface: Interface, type_name: str):
+    """Find a callback interface by name.
+
+    In batch mode, looks up directly in the global context (no imported_interfaces).
+    Falls back to BFS over imported_interfaces for old single-file mode.
+
+    Mirrors the semantics of IDL::Interface::referenced_interface +
+    callback_interface_for_type from IDLGenerators.cpp.
+    """
+    if _active_context is not None:
+        ctx_iface = _active_context.interfaces.get(type_name)
+        if ctx_iface is not None and ctx_iface.is_callback_interface:
+            return ctx_iface
+        return None
+
+    # Old single-file mode: BFS over imported_interfaces.
+    seen: set[str] = set()
+    queue = [interface]
+    while queue:
+        i = queue.pop(0)
+        if i.filename in seen:
+            continue
+        seen.add(i.filename)
+        if i.is_callback_interface and i.name == type_name:
+            return i
+        for imp in i.imported_interfaces:
+            if imp.filename not in seen:
+                queue.append(imp)
+    return None
+
+
 # Storage-type for sequences in idl_type_name_to_cpp_type. Mirrors
 # SequenceStorageType in IDLGenerators.cpp.
 _SEQ_STORAGE_VECTOR = "Vector"
@@ -698,8 +728,6 @@ def idl_type_name_to_cpp_type(type_: Type, interface: Interface) -> tuple[str, s
 
     Returns (cpp_type_name, sequence_storage_type).
     """
-    from .to_cpp import _find_callback_interface
-
     name = type_.name
     if type_.kind == "plain" and _is_platform_object_name(name):
         # Use the fully-qualified name when the global context is available.
@@ -814,8 +842,6 @@ def union_type_to_variant(union_type: Type, interface: Interface) -> str:
 def attribute_callback_basename(attribute) -> str:
     """Mirror the AttributeCallbackName / snake_case rule used for callback
     names (IDLGenerators.cpp:365-371)."""
-    from .prototype import _to_snakecase  # avoid circular import at module load
-
     name = attribute.extended_attributes.get("AttributeCallbackName")
     if name:
         return name
@@ -830,9 +856,6 @@ def attribute_cpp_name(attribute) -> str:
     through make_input_acceptable_cpp (which handles C++ keyword clashes
     like `operator` → `operator_`).
     """
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
-
     name = attribute.extended_attributes.get("ImplementedAs")
     if name:
         return name
@@ -843,9 +866,6 @@ def _generate_dictionary_wrap(g, type_, value, interface: Interface, recursion_d
     """Port of the dictionary branch of generate_wrap_statement
     (IDLGenerators.cpp:2273-2336).
     """
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
-
     g.append(
         "\n"
         "    {\n"

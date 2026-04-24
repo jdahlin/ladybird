@@ -15,7 +15,14 @@ richer cases follow in later commits.
 from __future__ import annotations
 
 from ..ast import Interface
+from .naming import _make_input_acceptable_cpp
+from .naming import _to_snakecase
+from .operations import _generate_argument_count_check
+from .operations import generate_function
+from .overload_arbiter import generate_overload_arbiter
 from .source_generator import SourceGenerator
+from .to_cpp import generate_arguments
+from .types import generate_wrap_statement
 
 
 def generate_constructor_header(interface: Interface, generator: SourceGenerator) -> None:
@@ -47,9 +54,6 @@ def generate_constructor_header(interface: Interface, generator: SourceGenerator
         )
 
     # Static attribute declarations (IDLGenerators.cpp:5599-5611).
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
-
     for sa in interface.static_attributes:
         ag = g.fork()
         ag.set("attribute.name:snakecase", _to_snakecase(sa.name))
@@ -159,8 +163,6 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
     for constant in interface.constants:
         cg = g.fork()
         cg.set("constant.name", constant.name)
-        from .types import generate_wrap_statement
-
         generate_wrap_statement(
             cg,
             constant.value,
@@ -174,9 +176,6 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
         )
 
     # IDLGenerators.cpp:5718-5732 — register native_accessors for static attributes.
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
-
     for sa in interface.static_attributes:
         ag = g.fork()
         snake = _to_snakecase(sa.name)
@@ -216,8 +215,6 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
     g.append("\n}\n")
 
     # IDLGenerators.cpp:5740-5768 — JS_DEFINE_NATIVE_FUNCTION for static attrs.
-    from .types import generate_wrap_statement
-
     for sa in interface.static_attributes:
         ag = g.fork()
         snake = _to_snakecase(sa.name)
@@ -236,8 +233,6 @@ def generate_constructor_implementation(interface: Interface, generator: SourceG
         ag.append("\n}\n")
 
     # IDLGenerators.cpp:5770-5780 — JS_DEFINE_NATIVE_FUNCTION for each static op.
-    from .operations import generate_function
-
     for op in interface.static_operations:
         if "FIXME" in op.extended_attributes:
             continue
@@ -286,8 +281,6 @@ def _generate_constructors(interface: Interface, generator: SourceGenerator) -> 
     for ctor in interface.constructors:
         _generate_constructor(ctor, interface, generator, has_html_constructor)
     if any(getattr(c, "is_overloaded", False) for c in interface.constructors):
-        from .overload_arbiter import generate_overload_arbiter
-
         generate_overload_arbiter(
             list(interface.constructors),
             interface.name,
@@ -344,9 +337,6 @@ def _generate_constructor(
         "    // 6. Set instance.[[PrimaryInterface]] to interface.\n"
     )
     if constructor.parameters:
-        from .operations import _generate_argument_count_check
-        from .to_cpp import generate_arguments
-
         # Synthesize a tiny "function-like" so the count-check helper can be reused.
         class _Pseudo:
             def __init__(self, params, name):

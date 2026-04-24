@@ -9,15 +9,26 @@ test surfaces it as a known gap.
 
 from __future__ import annotations
 
+from ..ast import Attribute
 from ..ast import Interface
 from ..ast import Parameter
+from ..ast import Type
+from .naming import _make_input_acceptable_cpp
+from .naming import _to_snakecase as _to_snake_impl
 from .source_generator import SourceGenerator
 from .types import _cpp_type_name
+from .types import _find_callback_interface
+from .types import _get_active_context
+from .types import _is_platform_object_name
+from .types import flattened_member_types
+from .types import includes_nullable_type
+from .types import includes_undefined
 from .types import is_boolean
 from .types import is_enum
 from .types import is_floating_point
 from .types import is_integer
 from .types import is_string
+from .types import union_type_to_variant
 
 # Same map as in types.py but with `boolean` and `long long` matching
 # IDLGenerators.cpp:625-635 (generate_to_integral table).
@@ -32,12 +43,6 @@ _TO_INTEGRAL = {
     "unsigned long": "WebIDL::UnsignedLong",
     "unsigned long long": "WebIDL::UnsignedLongLong",
 }
-
-
-def _make_input_acceptable_cpp(s: str) -> str:
-    from .prototype import _make_input_acceptable_cpp as f
-
-    return f(s)
 
 
 def generate_to_cpp(
@@ -100,9 +105,7 @@ def generate_to_cpp(
     if is_enum(type_, interface):
         # Attribute setters return undefined instead of throwing on invalid
         # enum values (IDLGenerators.cpp:1872-1876).
-        from ..ast import Attribute as _Attr
-
-        throw_on_invalid = not isinstance(parameter, _Attr)
+        throw_on_invalid = not isinstance(parameter, Attribute)
         _generate_to_enum(
             g,
             type_,
@@ -112,8 +115,6 @@ def generate_to_cpp(
             throw_on_invalid=throw_on_invalid,
         )
         return
-    from .types import _get_active_context
-
     _ctx = _get_active_context()
     _ctx_dicts = _ctx.dictionaries if _ctx is not None else {}
     _ctx_cbs = _ctx.callback_functions if _ctx is not None else {}
@@ -171,9 +172,7 @@ def generate_to_cpp(
             _resolved_nullable = _resolved.nullable or type_.nullable
             if _resolved_name in interface.callback_functions or _resolved_name in _ctx_cbs:
                 # Use a synthetic type with the resolved name and combined nullability.
-                from ..ast import Type as _Type
-
-                _synth = _Type(
+                _synth = Type(
                     name=_resolved_name,
                     nullable=_resolved_nullable,
                     kind=_resolved.kind,
@@ -220,8 +219,6 @@ def _generate_to_dictionary(generator, type_, interface: Interface) -> None:
         "\n"
         "    @parameter.type.name.normalized@ @cpp_name@ {};\n"
     )
-    from .types import _get_active_context
-
     _ctx = _get_active_context()
     _ctx_dicts = _ctx.dictionaries if _ctx is not None else {}
 
@@ -240,10 +237,7 @@ def _generate_to_dictionary(generator, type_, interface: Interface) -> None:
             i = _DICTIONARY_INDEX[0]
             mg = generator.fork()
             mg.set("member_key", member.name)
-            from .prototype import _make_input_acceptable_cpp
-            from .prototype import _to_snakecase
-
-            member_js = _make_input_acceptable_cpp(_to_snakecase(member.name))
+            member_js = _make_input_acceptable_cpp(_to_snake_impl(member.name))
             value_name = f"{member_js}_value_{i}"
             prop_value_name = f"{member_js}_property_value_{i}"
             mg.set("member_name", member_js)
@@ -290,8 +284,6 @@ def _generate_to_dictionary(generator, type_, interface: Interface) -> None:
 
 def _generate_to_callback_function(generator, type_, interface: Interface, *, optional) -> None:
     """Port of generate_callback_function_to_cpp (IDLGenerators.cpp:1184-1220)."""
-    from .types import _get_active_context
-
     g = generator
     _ctx = _get_active_context()
     _ctx_cbs = _ctx.callback_functions if _ctx is not None else {}
@@ -544,8 +536,6 @@ def _lookup_enum(name: str, interface: Interface):
     """Look up an enumeration by name, checking interface first then global context."""
     if name in interface.enumerations:
         return interface.enumerations[name]
-    from .types import _get_active_context
-
     ctx = _get_active_context()
     if ctx is not None:
         return ctx.enumerations.get(name)
@@ -644,7 +634,7 @@ def generate_arguments(parameters, interface: Interface, generator: SourceGenera
     """
     names = []
     for index, parameter in enumerate(parameters):
-        cpp_name = _make_input_acceptable_cpp(_to_snake(parameter.name))
+        cpp_name = _make_input_acceptable_cpp(_to_snake_impl(parameter.name))
         if parameter.variadic:
             names.append(f"move({cpp_name})")
         else:
@@ -655,7 +645,7 @@ def generate_arguments(parameters, interface: Interface, generator: SourceGenera
             parameter,
             "arg",
             str(index),
-            _to_snake(parameter.name),
+            _to_snake_impl(parameter.name),
             interface,
             generator,
             optional=parameter.optional,
@@ -663,46 +653,6 @@ def generate_arguments(parameters, interface: Interface, generator: SourceGenera
             variadic=parameter.variadic,
         )
     return ", ".join(names)
-
-
-def _to_snake(s):
-    from .prototype import _to_snakecase
-
-    return _to_snakecase(s)
-
-
-def _find_callback_interface(interface: Interface, type_name: str):
-    """Find a callback interface by name.
-
-    In batch mode, looks up directly in the global context (no imported_interfaces).
-    Falls back to BFS over imported_interfaces for old single-file mode.
-
-    Mirrors the semantics of IDL::Interface::referenced_interface +
-    callback_interface_for_type from IDLGenerators.cpp.
-    """
-    from .types import _get_active_context
-
-    _ctx = _get_active_context()
-    if _ctx is not None:
-        ctx_iface = _ctx.interfaces.get(type_name)
-        if ctx_iface is not None and ctx_iface.is_callback_interface:
-            return ctx_iface
-        return None
-
-    # Old single-file mode: BFS over imported_interfaces.
-    seen: set[str] = set()
-    queue = [interface]
-    while queue:
-        i = queue.pop(0)
-        if i.filename in seen:
-            continue
-        seen.add(i.filename)
-        if i.is_callback_interface and i.name == type_name:
-            return i
-        for imp in i.imported_interfaces:
-            if imp.filename not in seen:
-                queue.append(imp)
-    return None
 
 
 def _generate_to_callback_interface(g, type_, callback_interface) -> None:
@@ -873,15 +823,12 @@ def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
             return (f"GC::Root<{cb_cpp}>", "GC::RootVector")
         if _lookup_enum(t.name, interface) is not None:
             return (t.name, "Vector")
-        from .types import _cpp_type_name as _cptn
-        from .types import _get_active_context as _gac
-
-        _ctx_seq = _gac()
+        _ctx_seq = _get_active_context()
         _ctx_dicts_seq = _ctx_seq.dictionaries if _ctx_seq is not None else {}
         if t.name in interface.dictionaries or t.name in _ctx_dicts_seq:
-            return (_cptn(t), "Vector")
+            return (_cpp_type_name(t), "Vector")
         # Platform object — use fully-qualified name from context when available.
-        return (f"GC::Root<{_cptn(t)}>", "GC::RootVector")
+        return (f"GC::Root<{_cpp_type_name(t)}>", "GC::RootVector")
     if is_string(t):
         if "Utf16" in t.name:
             return ("Utf16String", "Vector")
@@ -905,8 +852,6 @@ def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
     if t.name == "Promise":
         return ("GC::Root<WebIDL::Promise>", "GC::RootVector")
     if t.kind == "union":
-        from .types import union_type_to_variant
-
         return (union_type_to_variant(t, interface), "Vector")
     if t.kind == "parameterized" and t.name in ("sequence", "FrozenArray"):
         elem_cpp, elem_storage = _idl_type_name_to_cpp_type(t.parameters[0], interface)
@@ -1005,9 +950,7 @@ def _generate_sequence_from_iterable(
         "        auto next_item@recursion_depth@ = TRY(next@recursion_depth@.get<JS::IterationResult>().value);\n"
     )
     # Coerce element. C++ uses parameter with empty extended_attributes, name=iterable_name.
-    from ..ast import Parameter as _P
-
-    element_param = _P(name=iterable_name, type=type_.parameters[0], extended_attributes={})
+    element_param = Parameter(name=iterable_name, type=type_.parameters[0], extended_attributes={})
     generate_to_cpp(
         element_param,
         "next_item",
@@ -1037,14 +980,6 @@ def _generate_to_union(
     recursion_depth: int,
 ) -> None:
     """Port of generate_union_to_cpp (IDLGenerators.cpp:1295-1827)."""
-    from ..ast import Parameter
-    from .types import _is_platform_object_name
-    from .types import flattened_member_types
-    from .types import includes_nullable_type
-    from .types import includes_undefined
-    from .types import is_string
-    from .types import union_type_to_variant
-
     ug = generator.fork()
     ug.set("union_type", union_type_to_variant(type_, interface))
     ug.set("recursion_depth", str(recursion_depth))
@@ -1053,9 +988,6 @@ def _generate_to_union(
 
     # Dictionary lookup — iterate interface.dictionaries to match the C++ ordering,
     # then fall back to global context dictionaries.
-    from .types import _cpp_type_name
-    from .types import _get_active_context
-
     _ctx_union = _get_active_context()
     _ctx_dicts_union = _ctx_union.dictionaries if _ctx_union is not None else {}
     dictionary_type = None
@@ -1508,8 +1440,6 @@ def _generate_to_record(
     recursion_depth: int,
 ) -> None:
     """Port of generate_record_to_cpp (IDLGenerators.cpp:1115-1182)."""
-    from ..ast import Parameter as _Parameter
-
     rg = g.fork()
     rg.set("recursion_depth", str(recursion_depth))
     record_cpp, _ = _idl_type_name_to_cpp_type(type_, interface)
@@ -1536,7 +1466,7 @@ def _generate_to_record(
         "        if (!descriptor@recursion_depth@.has_value() || !descriptor@recursion_depth@->enumerable.has_value() || !descriptor@recursion_depth@->enumerable.value())\n"
         "            continue;\n"
     )
-    key_param = _Parameter(type=type_.parameters[0], name=cpp_name, extended_attributes={})
+    key_param = Parameter(type=type_.parameters[0], name=cpp_name, extended_attributes={})
     generate_to_cpp(
         key_param,
         "key",
@@ -1552,7 +1482,7 @@ def _generate_to_record(
     rg.append(
         "\n        auto value@recursion_depth@ = TRY(@js_name@@js_suffix@_object.get(property_key@recursion_depth@));\n"
     )
-    value_param = _Parameter(type=type_.parameters[1], name=cpp_name, extended_attributes={})
+    value_param = Parameter(type=type_.parameters[1], name=cpp_name, extended_attributes={})
     generate_to_cpp(
         value_param,
         "value",

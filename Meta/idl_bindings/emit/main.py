@@ -12,11 +12,19 @@ from __future__ import annotations
 from ..ast import Interface
 from .constructor import generate_constructor_header
 from .constructor import generate_constructor_implementation
+from .naming import _make_input_acceptable_cpp
+from .naming import _to_snakecase
+from .operations import generate_function
+from .overload_arbiter import generate_overload_arbiter
 from .prologue import generate_implementation_prologue
+from .prototype import _generate_prototype_or_global_mixin_declarations
+from .prototype import _generate_prototype_or_global_mixin_definitions
+from .prototype import _generate_prototype_or_global_mixin_initialization
 from .prototype import generate_prototype_header
 from .prototype import generate_prototype_implementation
 from .source_generator import SourceGenerator
 from .source_generator import StringBuilder
+from .to_cpp import _DICTIONARY_INDEX
 from .types import _set_active_context
 
 
@@ -72,8 +80,6 @@ def generate_implementation(interface: Interface, context=None) -> str:
 
 
 def _generate_implementation_impl(interface: Interface, context=None) -> str:
-    from .to_cpp import _DICTIONARY_INDEX
-
     # Reset counter only in single-file (no context) mode.  In batch mode the
     # caller manages the counter so it accumulates across files, matching the
     # C++ static variable (IDLGenerators.cpp:729: `static auto i = 0`).
@@ -107,8 +113,6 @@ def _generate_implementation_impl(interface: Interface, context=None) -> str:
 
 def _generate_global_mixin_header(interface: Interface, generator: SourceGenerator) -> None:
     """Port of generate_global_mixin_header (IDLGenerators.cpp:6086-6104)."""
-    from .prototype import _generate_prototype_or_global_mixin_declarations
-
     g = generator.fork()
     g.set("class_name", interface.global_mixin_class)
     g.append(
@@ -127,9 +131,6 @@ def _generate_global_mixin_header(interface: Interface, generator: SourceGenerat
 
 def _generate_global_mixin_implementation(interface: Interface, generator: SourceGenerator) -> None:
     """Port of generate_global_mixin_implementation (IDLGenerators.cpp:6106-6120)."""
-    from .prototype import _generate_prototype_or_global_mixin_definitions
-    from .prototype import _generate_prototype_or_global_mixin_initialization
-
     g = generator.fork()
     g.set("class_name", interface.global_mixin_class)
     g.set("prototype_name", interface.prototype_class)
@@ -141,9 +142,6 @@ def _generate_global_mixin_implementation(interface: Interface, generator: Sourc
 
 def _generate_namespace_header(interface: Interface, generator: SourceGenerator) -> None:
     """Port of generate_namespace_header (IDLGenerators.cpp:5363-5416)."""
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
-
     g = generator.fork()
     g.set("namespace_class", interface.namespace_class)
     g.append(
@@ -191,10 +189,6 @@ def _generate_namespace_header(interface: Interface, generator: SourceGenerator)
 
 def _generate_namespace_implementation(interface: Interface, generator: SourceGenerator) -> None:
     """Port of generate_namespace_implementation (IDLGenerators.cpp:5498-5570)."""
-    from .operations import generate_function
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
-
     g = generator.fork()
     g.set("name", interface.name)
     g.set("namespace_class", interface.namespace_class)
@@ -281,8 +275,6 @@ def _generate_namespace_implementation(interface: Interface, generator: SourceGe
     # Overload arbiters — mirrors IDLGenerators.cpp:5565-5569.
     for name, group in overload_sets.items():
         if len(group) > 1:
-            from .overload_arbiter import generate_overload_arbiter
-
             generate_overload_arbiter(
                 group,
                 name,

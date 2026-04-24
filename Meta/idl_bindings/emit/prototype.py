@@ -14,18 +14,28 @@ no setlike/maplike, no constants, and no attributes (concept-ladder rung
 
 from __future__ import annotations
 
-import functools
-
 from ..ast import Interface
+from ..ast import Type
+from .naming import _make_input_acceptable_cpp
+from .naming import _to_snakecase
+from .operations import generate_function
+from .overload_arbiter import generate_overload_arbiter
 from .source_generator import SourceGenerator
+from .source_generator import StringBuilder
+from .to_cpp import generate_arguments
+from .to_cpp import generate_to_cpp
+from .types import _cpp_type_name
+from .types import _get_active_context
+from .types import attribute_callback_basename
+from .types import attribute_cpp_name
+from .types import generate_wrap_statement
+from .types import is_json
 
 
 def _lookup_enum(name: str, interface: Interface):
     """Look up an enumeration by name, checking interface first then global context."""
     if name in interface.enumerations:
         return interface.enumerations[name]
-    from .types import _get_active_context
-
     ctx = _get_active_context()
     if ctx is not None:
         return ctx.enumerations.get(name)
@@ -389,62 +399,6 @@ def _generate_enumerations(interface: Interface, generator: SourceGenerator) -> 
 
 # IDLGenerators.cpp:make_input_acceptable_cpp helper (file-scope). Maps
 # C++ keywords to a `_`-suffixed form and replaces `-` with `_`.
-_CPP_KEYWORD_RESERVED = frozenset(
-    {
-        "break",
-        "char",
-        "class",
-        "continue",
-        "default",
-        "delete",
-        "for",
-        "initialize",
-        "inline",
-        "mutable",
-        "namespace",
-        "operator",
-        "register",
-        "switch",
-        "template",
-    }
-)
-
-
-def _make_input_acceptable_cpp(s: str) -> str:
-    if s in _CPP_KEYWORD_RESERVED:
-        return s + "_"
-    return s.replace("-", "_")
-
-
-@functools.lru_cache(maxsize=None)
-def _to_snakecase(s: str) -> str:
-    """Mirror AK::String::to_snakecase.
-
-    Inserts `_` before each uppercase letter (except at the start), then
-    lowercases. Adjacent uppercases stay together until the *last* one in
-    a run, so "URLSearchParams" → "url_search_params" and "HTMLElement"
-    → "html_element".
-    """
-    # Mirror AK::StringUtils::to_snakecase (StringUtils.cpp:306-330) exactly.
-    if not s:
-        return s
-    out: list[str] = []
-    for i, ch in enumerate(s):
-        insert = False
-        if i > 0:
-            prev = s[i - 1]
-            if prev.isascii() and prev.islower() and prev.isalpha() and ch.isascii() and ch.isupper() and ch.isalpha():
-                insert = True
-            elif i < len(s) - 1:
-                nxt = s[i + 1]
-                if ch.isascii() and ch.isupper() and ch.isalpha() and nxt.isascii() and nxt.islower() and nxt.isalpha():
-                    insert = True
-        if insert:
-            out.append("_")
-        out.append(ch.lower())
-    return "".join(out)
-
-
 def generate_prototype_implementation(interface: Interface, generator: SourceGenerator) -> None:
     """Port of generate_prototype_implementation (IDLGenerators.cpp:5826-5912).
 
@@ -601,8 +555,6 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
             _generate_attribute_setter(attribute, interface, class_name, generator)
 
     # IDLGenerators.cpp:4866-4886 — per-operation bodies + overload arbiters.
-    from .operations import generate_function
-
     overload_groups: dict[str, list] = {}
     for op in interface.operations:
         if "FIXME" in op.extended_attributes:
@@ -622,8 +574,6 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
     # IDLGenerators.cpp:4882-4886 — overload arbiters for multi-overload sets.
     for name, group in overload_groups.items():
         if len(group) > 1:
-            from .overload_arbiter import generate_overload_arbiter
-
             generate_overload_arbiter(
                 group,
                 name,
@@ -637,10 +587,8 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
     if interface.has_stringifier:
         sg = generator.fork()
         sg.set("class_name", class_name)
-        from .prototype import _to_snakecase as _snake
-
         if interface.stringifier_attribute is not None:
-            sg.set("attribute.cpp_getter_name", _snake(interface.stringifier_attribute.name))
+            sg.set("attribute.cpp_getter_name", _to_snakecase(interface.stringifier_attribute.name))
         sg.append(
             "\n"
             "JS_DEFINE_NATIVE_FUNCTION(@class_name@::to_string)\n"
@@ -697,13 +645,10 @@ def _generate_setlike_definitions(interface: Interface, class_name: str, generat
             "    }\n"
         )
     else:
-        from .types import _cpp_type_name as _ctn
-        from .types import _get_active_context as _gac
-
-        _ctx = _gac()
+        _ctx = _get_active_context()
         # Use FQN for platform objects (e.g. CSS::FontFace); fall back to plain name.
         if _ctx is not None and set_entry_type.name in _ctx.interfaces:
-            type_name = _ctn(set_entry_type)
+            type_name = _cpp_type_name(set_entry_type)
         else:
             type_name = set_entry_type.name
         value_type_check = (
@@ -1021,9 +966,6 @@ def _generate_dictionaries(interface: Interface, generator: SourceGenerator) -> 
 
     Emits a <snake_name>_to_value helper for each dictionary marked [GenerateToValue].
     """
-    from ..ast import Type
-    from .types import generate_wrap_statement
-
     for dict_name, dictionary in interface.dictionaries.items():
         if not dictionary.is_original_definition:
             continue
@@ -1034,11 +976,8 @@ def _generate_dictionaries(interface: Interface, generator: SourceGenerator) -> 
         dict_type_name = _make_input_acceptable_cpp(dict_name)
 
         # Use namespace-qualified name when the dictionary is defined in another namespace.
-        from ..ast import Type as _Type
-        from .types import _cpp_type_name as _ctn
-
-        _dict_type_for_name = _Type(name=dict_name, nullable=False)
-        dict_qualified_name = _ctn(_dict_type_for_name)
+        _dict_type_for_name = Type(name=dict_name, nullable=False)
+        dict_qualified_name = _cpp_type_name(_dict_type_for_name)
 
         dg = generator.fork()
         dg.set("dictionary.name", dict_type_name)
@@ -1059,8 +998,6 @@ def _generate_dictionaries(interface: Interface, generator: SourceGenerator) -> 
 
 def _generate_pair_iterator_definitions(interface: Interface, class_name: str, generator: SourceGenerator) -> None:
     """Port of the pair-iterator function bodies (IDLGenerators.cpp:4917-4970)."""
-    from .types import generate_wrap_statement
-
     ig = generator.fork()
     ig.set("class_name", class_name)
 
@@ -1133,8 +1070,6 @@ def _generate_async_iterator_values_definitions(
     interface: Interface, class_name: str, generator: SourceGenerator
 ) -> None:
     """Port of the async-iterator values body (IDLGenerators.cpp:4971-4996)."""
-    from .to_cpp import generate_arguments
-
     ig = generator.fork()
     ig.set("class_name", class_name)
     ig.set("iterator_name", f"{interface.fully_qualified_name}AsyncIterator")
@@ -1163,10 +1098,6 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
     """Port of the simple-getter slice of generate_prototype_or_global_mixin_definitions
     (IDLGenerators.cpp:4493-4856 — the non-Reflect, non-Promise, non-Cached path).
     """
-    from .types import attribute_callback_basename
-    from .types import attribute_cpp_name
-    from .types import generate_wrap_statement
-
     is_cached = "CachedAttribute" in attribute.extended_attributes
 
     is_promise = attribute.type and attribute.type.name == "Promise"
@@ -1509,11 +1440,8 @@ def _generate_prototype_or_global_mixin_initialization(
     # IDLGenerators.cpp:3849-3859 — separate StringBuilder for [Exposed=Window]-only
     # members. Members marked [Exposed=Window] in an interface that's exposed
     # to a wider set get routed here, then wrapped in `if (is<HTML::Window>(...))`.
-    from .source_generator import SourceGenerator as _SG
-    from .source_generator import StringBuilder as _SB
-
-    window_builder = _SB()
-    window_g = _SG(window_builder, dict(g._mapping))
+    window_builder = StringBuilder()
+    window_g = SourceGenerator(window_builder, dict(g._mapping))
 
     def _pick(extended_attributes: dict) -> SourceGenerator:
         exposed = extended_attributes.get("Exposed")
@@ -1524,7 +1452,6 @@ def _generate_prototype_or_global_mixin_initialization(
     # IDLGenerators.cpp:3861-3941 — per-attribute define_native_accessor.
     # (Note: in the C++ source, the attributes loop comes BEFORE the
     # constants loop. Match that ordering.)
-    from .types import attribute_callback_basename
 
     for attribute in interface.attributes:
         has_unforgeable = "LegacyUnforgeable" in attribute.extended_attributes
@@ -1629,8 +1556,6 @@ def _generate_prototype_or_global_mixin_initialization(
     # not generating unforgeables). The C++ source emits constants BEFORE
     # the operations loop.
     if not generate_unforgeables:
-        from .types import generate_wrap_statement
-
         for constant in interface.constants:
             cg = g.fork()
             cg.set("constant.name", constant.name)
@@ -1659,9 +1584,6 @@ def _generate_prototype_or_global_mixin_initialization(
             continue
         if not generate_unforgeables and has_unforgeable:
             continue
-        from .prototype import _make_input_acceptable_cpp
-        from .prototype import _to_snakecase
-
         og = _pick(first.extended_attributes).fork()
         og.set("function.name", name)
         og.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(name)))
@@ -1820,10 +1742,6 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
     returns undefined; everything else coerces value with generate_to_cpp
     and calls impl->set_<cpp_name>().
     """
-    from .to_cpp import generate_to_cpp
-    from .types import attribute_callback_basename
-    from .types import attribute_cpp_name
-
     is_reflect = "Reflect" in attribute.extended_attributes
     has_ce = "CEReactions" in attribute.extended_attributes
     if is_reflect:
@@ -2066,8 +1984,6 @@ def _create_an_inheritance_stack(interface: Interface) -> list[Interface]:
     Walks the parent chain using imported_interfaces, then falls back to the
     global context in batch mode.
     """
-    from .types import _get_active_context
-
     ctx = _get_active_context()
 
     stack = [interface]
@@ -2089,9 +2005,6 @@ def _create_an_inheritance_stack(interface: Interface) -> list[Interface]:
 
 def _generate_default_to_json_function(class_name: str, interface: Interface, generator: SourceGenerator) -> None:
     """Port of generate_default_to_json_function (IDLGenerators.cpp:3518-3552)."""
-    from .types import generate_wrap_statement
-    from .types import is_json
-
     g = generator.fork()
     g.set("class_name", class_name)
     g.append(
@@ -2107,9 +2020,6 @@ def _generate_default_to_json_function(class_name: str, interface: Interface, ge
 
     chain = _create_an_inheritance_stack(interface)
     # Process in reverse (ancestors first).
-    from .source_generator import SourceGenerator as _SG2
-    from .source_generator import StringBuilder as _SB2
-
     for iface in reversed(chain):
         has_default_to_json = any(
             op.name == "toJSON" and "Default" in op.extended_attributes for op in iface.operations
@@ -2118,8 +2028,8 @@ def _generate_default_to_json_function(class_name: str, interface: Interface, ge
             continue
 
         # Mirror the C++ window_exposed_only_members pattern in collect_attribute_values.
-        window_builder2 = _SB2()
-        window_g2 = _SG2(window_builder2, dict(g._mapping))
+        window_builder2 = StringBuilder()
+        window_g2 = SourceGenerator(window_builder2, dict(g._mapping))
 
         def _pick_tojson(ea: dict, _wg: SourceGenerator = window_g2) -> SourceGenerator:
             exposed = ea.get("Exposed")
@@ -2180,9 +2090,7 @@ def _generate_default_to_json_function(class_name: str, interface: Interface, ge
         for constant in iface.constants:
             cg = g.fork()
             cg.set("constant.name", constant.name)
-            from .types import generate_wrap_statement as _wrap
-
-            _wrap(
+            generate_wrap_statement(
                 cg,
                 constant.value,
                 constant.type,

@@ -17,7 +17,11 @@ from __future__ import annotations
 
 from ..ast import Interface
 from ..ast import Operation
+from .naming import _make_input_acceptable_cpp
+from .naming import _to_snakecase
 from .source_generator import SourceGenerator
+from .to_cpp import generate_arguments
+from .types import generate_wrap_statement
 
 
 def generate_function(
@@ -32,9 +36,6 @@ def generate_function(
     has_ce = "CEReactions" in function.extended_attributes
     if has_ce and static:
         raise NotImplementedError("[CEReactions] static operations not yet supported")
-
-    from .prototype import _make_input_acceptable_cpp
-    from .prototype import _to_snakecase
 
     g = generator.fork()
     g.set("class_name", class_name)
@@ -77,8 +78,6 @@ def generate_function(
         _generate_argument_count_check(function, generator)
 
     # IDLGenerators.cpp:2427-2429 — coerce each argument.
-    from .to_cpp import generate_arguments
-
     args = generate_arguments(function.parameters, interface, g)
 
     if static:
@@ -132,8 +131,6 @@ def generate_function(
         )
 
     # IDLGenerators.cpp:2496 — return statement.
-    from .types import generate_wrap_statement
-
     if function.return_type is None:
         raise AssertionError("operation without return type")
     generate_wrap_statement(g, "retval", function.return_type, interface, "return")
