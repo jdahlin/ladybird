@@ -22,6 +22,45 @@ is the only string type used.
 
 from __future__ import annotations
 
+import functools
+import re
+
+# Compiled regex for SourceGenerator template substitution.
+# Matches: \@ or \\ (escape), @key@ (placeholder). Plain text is consumed via
+# slicing between matches — much faster than the character-by-character loop.
+_TMPL_RE = re.compile(r"\\([@\\])|@([^@]*)@")
+
+
+@functools.lru_cache(maxsize=4096)
+def _compile_pattern(pattern: str) -> tuple:
+    """Parse a template pattern into a tuple of (is_placeholder, content) pairs.
+
+    Cached per unique pattern string — emitter code reuses the same string
+    literals on every interface, so the regex runs once per distinct template
+    rather than once per interface.
+
+    Returns a tuple of (bool, str) pairs:
+      (False, text)        — emit text verbatim
+      (True, placeholder)  — look up placeholder in the mapping
+    """
+    if "@" not in pattern and "\\" not in pattern:
+        return ((False, pattern),)
+    parts: list[tuple[bool, str]] = []
+    pos = 0
+    for m in _TMPL_RE.finditer(pattern):
+        start = m.start()
+        if start > pos:
+            parts.append((False, pattern[pos:start]))
+        escape, placeholder = m.groups()
+        if escape is not None:
+            parts.append((False, escape))
+        else:
+            parts.append((True, placeholder))
+        pos = m.end()
+    if pos < len(pattern):
+        parts.append((False, pattern[pos:]))
+    return tuple(parts)
+
 
 class StringBuilder:
     """Thin wrapper over a list-of-strings sink.
@@ -88,39 +127,18 @@ class SourceGenerator:
         return self._builder.to_string()
 
     def append(self, pattern: str) -> None:
-        # Walk the pattern character by character. The C++ side uses
-        # GenericLexer::consume_until, which we mirror with a manual cursor.
-        i = 0
-        n = len(pattern)
+        # _compile_pattern is LRU-cached: the regex runs once per distinct
+        # template string across all interfaces, not once per call.
         out = self._builder.append
-        while i < n:
-            ch = pattern[i]
-            if ch == self._escape:
-                # `\@` → literal `@`; `\\` → literal `\`. Any other escape
-                # is an error per AK::SourceGenerator.
-                if i + 1 >= n:
-                    raise ValueError("Unexpected EOF while parsing escape sequence")
-                next_ch = pattern[i + 1]
-                if next_ch != self._opening and next_ch != self._escape:
-                    raise ValueError(f"Invalid escape sequence '{self._escape}{next_ch}' on SourceGenerator")
-                out(next_ch)
-                i += 2
-                continue
-            if ch == self._opening:
-                # Find the closing delimiter.
-                close_idx = pattern.find(self._closing, i + 1)
-                if close_idx < 0:
-                    raise ValueError(f"Unterminated placeholder starting at offset {i} in pattern")
-                placeholder = pattern[i + 1 : close_idx]
-                out(self.get(placeholder))
-                i = close_idx + 1
-                continue
-            # Plain character — fast-path to the next special character.
-            j = i
-            while j < n and pattern[j] != self._opening and pattern[j] != self._escape:
-                j += 1
-            out(pattern[i:j])
-            i = j
+        mapping = self._mapping
+        for is_placeholder, content in _compile_pattern(pattern):
+            if is_placeholder:
+                try:
+                    out(mapping[content])
+                except KeyError:
+                    raise KeyError(f"No key named {content!r} set on SourceGenerator") from None
+            else:
+                out(content)
 
     def appendln(self, pattern: str) -> None:
         self.append(pattern)

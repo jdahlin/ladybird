@@ -55,25 +55,43 @@ class Token:
     column: int  # 1-based
 
 
-# Spec regexes from §2.2, transcribed verbatim.
-_INTEGER_RE = re.compile(r"-?([1-9][0-9]*|0[Xx][0-9A-Fa-f]+|0[0-7]*)")
-_DECIMAL_RE = re.compile(r"-?(([0-9]+\.[0-9]*|[0-9]*\.[0-9]+)([Ee][+-]?[0-9]+)?|[0-9]+[Ee][+-]?[0-9]+)")
-_IDENTIFIER_RE = re.compile(r"[_-]?[A-Za-z][0-9A-Z_a-z-]*")
-_STRING_RE = re.compile(r'"[^"]*"')
-_WHITESPACE_RE = re.compile(r"[\t\n\r ]+")
-_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
-_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+# Single combined tokenizer regex — matches every token kind and trivia in one
+# pass over the source. Alternative groups (named) are tried left-to-right so
+# longer patterns must precede shorter ones (decimal before integer, ... before
+# single char). Trivia (whitespace, comments) is captured separately and
+# filtered out in _tokenize so the caller never sees them.
+#
+# Named groups used to identify the match kind without an if-chain:
+#   trivia      — whitespace or comments (discarded)
+#   import_path — path from a #import directive (IMPORT_DIRECTIVE)
+#   decimal     — floating-point literal (DECIMAL)
+#   integer     — integer literal (INTEGER)
+#   ident       — identifier (IDENTIFIER)
+#   string      — quoted string, captures interior only (STRING)
+#   multi_punct — ... or :: (PUNCTUATOR)
+#   other       — any other single character (OTHER / single-char punctuator)
+_TOKEN_RE = re.compile(
+    r"(?P<trivia>[\t\n\r ]+|//[^\n]*|/\*.*?\*/)"
+    r"|#import\s+[<\"](?P<import_path>[^>\"]+)[>\"]"
+    r"|(?P<decimal>-?(?:(?:[0-9]+\.[0-9]*|[0-9]*\.[0-9]+)(?:[Ee][+-]?[0-9]+)?|[0-9]+[Ee][+-]?[0-9]+))"
+    r"|(?P<integer>-?(?:[1-9][0-9]*|0[Xx][0-9A-Fa-f]+|0[0-7]*))"
+    r"|(?P<ident>[_\-]?[A-Za-z][0-9A-Z_a-z\-]*)"
+    r'|"(?P<string>[^"]*)"'
+    r"|(?P<multi_punct>\.\.\.|\:\:)"
+    r"|(?P<other>.)",
+    re.DOTALL,
+)
 
-# Multi-character punctuators must be tried before single-character OTHER.
-# The Web IDL grammar uses these compound forms; longest-match wins.
-_MULTI_PUNCTUATORS = ("...", "::")
-
-# Ladybird extension: #import preprocessor directive.
-# Mirrors IDLParser.cpp:1270 (`lexer.consume_specific("#import"sv)`). The form is
-#   #import <Some/Path.idl>     or
-#   #import "Some/Path.idl"
-# (The C++ parser accepts the `<...>` form; both styles are tolerated here.)
-_IMPORT_RE = re.compile(r"#import\s+([<\"])([^>\"]+)[>\"]")
+# Map named group → TokenKind (for non-trivia groups).
+_GROUP_TO_KIND: dict[str, TokenKind] = {
+    "import_path": TokenKind.IMPORT_DIRECTIVE,
+    "decimal": TokenKind.DECIMAL,
+    "integer": TokenKind.INTEGER,
+    "ident": TokenKind.IDENTIFIER,
+    "string": TokenKind.STRING,
+    "multi_punct": TokenKind.PUNCTUATOR,
+    "other": TokenKind.OTHER,
+}
 
 
 class LexerError(Exception):
@@ -83,35 +101,62 @@ class LexerError(Exception):
         self.column = column
 
 
-class Lexer:
-    """Streaming Web IDL tokenizer with line/column tracking.
+def _tokenize(source: str) -> list[Token]:
+    """Tokenize the entire source at once using a single combined regex.
 
-    Tokens are produced lazily via next_token(); peek() looks ahead by one without
-    consuming. Whitespace and comments are skipped between tokens but still
-    update the (line, column) cursor.
+    Trivia (whitespace, comments) updates the line/column cursor but is not
+    added to the output token list. The final token is always EOF.
+    """
+    tokens: list[Token] = []
+    line = 1
+    col = 1
+
+    for m in _TOKEN_RE.finditer(source):
+        last_group = m.lastgroup
+        if last_group == "trivia":
+            # Update line/column and discard.
+            chunk = m.group(0)
+            newlines = chunk.count("\n")
+            if newlines:
+                line += newlines
+                col = len(chunk) - chunk.rfind("\n")
+            else:
+                col += len(chunk)
+            continue
+
+        kind = _GROUP_TO_KIND[last_group]
+        value = m.group(last_group)
+        tokens.append(Token(kind, value, line, col))
+        # Advance column (tokens never span multiple lines in Web IDL).
+        col += len(m.group(0))
+
+    tokens.append(Token(TokenKind.EOF, "", line, col))
+    return tokens
+
+
+class Lexer:
+    """Web IDL tokenizer.
+
+    Tokenizes the entire source on construction (single regex pass), then
+    exposes a streaming peek/next_token interface for the parser.
     """
 
     def __init__(self, source: str, filename: str = "<input>"):
         self.source = source
         self.filename = filename
-        self.pos = 0  # byte offset into source
-        self.line = 1  # 1-based current line
-        self.column = 1  # 1-based current column
-        self._lookahead: Token | None = None
+        self._tokens = _tokenize(source)
+        self._pos = 0
 
     # --- public API ---
 
     def peek(self) -> Token:
-        if self._lookahead is None:
-            self._lookahead = self._read_token()
-        return self._lookahead
+        return self._tokens[self._pos]
 
     def next_token(self) -> Token:
-        if self._lookahead is not None:
-            tok = self._lookahead
-            self._lookahead = None
-            return tok
-        return self._read_token()
+        tok = self._tokens[self._pos]
+        if tok.kind is not TokenKind.EOF:
+            self._pos += 1
+        return tok
 
     def tokens(self):
         while True:
@@ -119,88 +164,3 @@ class Lexer:
             yield tok
             if tok.kind is TokenKind.EOF:
                 return
-
-    # --- internals ---
-
-    def _advance(self, n: int) -> str:
-        # Consume n characters, updating line/column counters.
-        chunk = self.source[self.pos : self.pos + n]
-        for ch in chunk:
-            if ch == "\n":
-                self.line += 1
-                self.column = 1
-            else:
-                self.column += 1
-        self.pos += n
-        return chunk
-
-    def _skip_trivia(self) -> None:
-        # Consume whitespace and comments. The spec does not emit either as tokens.
-        while self.pos < len(self.source):
-            m = _WHITESPACE_RE.match(self.source, self.pos)
-            if m:
-                self._advance(m.end() - m.start())
-                continue
-            m = _LINE_COMMENT_RE.match(self.source, self.pos)
-            if m:
-                self._advance(m.end() - m.start())
-                continue
-            m = _BLOCK_COMMENT_RE.match(self.source, self.pos)
-            if m:
-                self._advance(m.end() - m.start())
-                continue
-            return
-
-    def _read_token(self) -> Token:
-        self._skip_trivia()
-        if self.pos >= len(self.source):
-            return Token(TokenKind.EOF, "", self.line, self.column)
-
-        line, column = self.line, self.column
-        rest = self.source
-
-        # Ladybird extension: #import directive must be tried before any other token
-        # because `#` is not a Web IDL punctuator and would otherwise be OTHER.
-        m = _IMPORT_RE.match(rest, self.pos)
-        if m:
-            path = m.group(2)
-            self._advance(m.end() - m.start())
-            return Token(TokenKind.IMPORT_DIRECTIVE, path, line, column)
-
-        # decimal must be tried before integer (longest-match: `1.5` is a decimal,
-        # not an integer followed by `.5`).
-        m = _DECIMAL_RE.match(rest, self.pos)
-        if m:
-            value = m.group(0)
-            self._advance(len(value))
-            return Token(TokenKind.DECIMAL, value, line, column)
-
-        m = _INTEGER_RE.match(rest, self.pos)
-        if m:
-            value = m.group(0)
-            self._advance(len(value))
-            return Token(TokenKind.INTEGER, value, line, column)
-
-        m = _IDENTIFIER_RE.match(rest, self.pos)
-        if m:
-            value = m.group(0)
-            self._advance(len(value))
-            return Token(TokenKind.IDENTIFIER, value, line, column)
-
-        m = _STRING_RE.match(rest, self.pos)
-        if m:
-            # Strip the surrounding quotes; preserve the inner contents verbatim.
-            value = m.group(0)[1:-1]
-            self._advance(m.end() - m.start())
-            return Token(TokenKind.STRING, value, line, column)
-
-        # Multi-character punctuators (`...`, `::`) — longest match.
-        for punct in _MULTI_PUNCTUATORS:
-            if rest.startswith(punct, self.pos):
-                self._advance(len(punct))
-                return Token(TokenKind.PUNCTUATOR, punct, line, column)
-
-        # Otherwise: a single non-alphanumeric character ("other" per §2.2).
-        ch = rest[self.pos]
-        self._advance(1)
-        return Token(TokenKind.OTHER, ch, line, column)

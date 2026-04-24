@@ -14,6 +14,8 @@ no setlike/maplike, no constants, and no attributes (concept-ladder rung
 
 from __future__ import annotations
 
+import functools
+
 from ..ast import Interface
 from .source_generator import SourceGenerator
 
@@ -414,6 +416,7 @@ def _make_input_acceptable_cpp(s: str) -> str:
     return s.replace("-", "_")
 
 
+@functools.lru_cache(maxsize=None)
 def _to_snakecase(s: str) -> str:
     """Mirror AK::String::to_snakecase.
 
