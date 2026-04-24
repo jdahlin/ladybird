@@ -381,7 +381,12 @@ class Parser:
                 entry, names_already_seen
             )
 
+        # Set the source file path so the Context can locate this enumeration.
+        enumeration.module_own_path = self.filename
+
         self.interface.enumerations[name] = enumeration
+        # Track names declared in THIS file (not imported) for own_enumerations.
+        self.interface.own_enumerations.append(name)
 
     # Dictionary :: dictionary identifier Inheritance { DictionaryMembers } ;
     # https://webidl.spec.whatwg.org/#prod-Dictionary
@@ -440,11 +445,14 @@ class Parser:
             extended_attributes=extended_attributes,
             parent_name=parent_name,
             members=members,
+            module_own_path=self.filename,
         )
         if partial:
             self.interface.partial_dictionaries.setdefault(name, []).append(dictionary)
         else:
             self.interface.dictionaries[name] = dictionary
+            # Track names declared in THIS file (not imported) for own_dictionaries.
+            self.interface.own_dictionaries.append(name)
 
     # CallbackRest :: identifier = Type ( ArgumentList ) ;
     # https://webidl.spec.whatwg.org/#prod-CallbackRest
@@ -521,7 +529,7 @@ class Parser:
     #
     # Caller has consumed `partial interface`. Mirrors IDLParser.cpp:860-870.
     def _parse_partial_interface(self, extended_attributes: dict[str, str]) -> None:
-        partial = Interface(filename=self.filename)
+        partial = Interface(filename=self.filename, is_partial=True)
         partial.extended_attributes = extended_attributes
         partial.name = self._expect_identifier().value
         if self._consume_punct(":"):

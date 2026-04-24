@@ -112,10 +112,15 @@ def generate_to_cpp(
             throw_on_invalid=throw_on_invalid,
         )
         return
-    if type_.kind == "plain" and type_.name in interface.dictionaries:
+    from .types import _get_active_context
+
+    _ctx = _get_active_context()
+    _ctx_dicts = _ctx.dictionaries if _ctx is not None else {}
+    _ctx_cbs = _ctx.callback_functions if _ctx is not None else {}
+    if type_.kind == "plain" and (type_.name in interface.dictionaries or type_.name in _ctx_dicts):
         _generate_to_dictionary(g, type_, interface)
         return
-    if type_.kind == "plain" and type_.name in interface.callback_functions:
+    if type_.kind == "plain" and (type_.name in interface.callback_functions or type_.name in _ctx_cbs):
         _generate_to_callback_function(g, type_, interface, optional=optional)
         return
     if type_.kind == "parameterized" and type_.name in ("sequence", "FrozenArray"):
@@ -157,6 +162,26 @@ def generate_to_cpp(
             recursion_depth=recursion_depth,
         )
         return
+    # Resolve typedef before checking callback functions (e.g. EventHandler → EventHandlerNonNull?).
+    if type_.kind == "plain" and _ctx is not None:
+        _td = _ctx.typedefs.get(type_.name) or interface.typedefs.get(type_.name)
+        if _td is not None and _td.type is not None:
+            _resolved = _td.type
+            _resolved_name = _resolved.name
+            _resolved_nullable = _resolved.nullable or type_.nullable
+            if _resolved_name in interface.callback_functions or _resolved_name in _ctx_cbs:
+                # Use a synthetic type with the resolved name and combined nullability.
+                from ..ast import Type as _Type
+
+                _synth = _Type(
+                    name=_resolved_name,
+                    nullable=_resolved_nullable,
+                    kind=_resolved.kind,
+                    parameters=_resolved.parameters,
+                    union_member_types=_resolved.union_member_types,
+                )
+                _generate_to_callback_function(g, _synth, interface, optional=optional)
+                return
     callback_iface = _find_callback_interface(interface, type_.name)
     if callback_iface is not None:
         _generate_to_callback_interface(g, type_, callback_iface)
@@ -195,9 +220,19 @@ def _generate_to_dictionary(generator, type_, interface: Interface) -> None:
         "\n"
         "    @parameter.type.name.normalized@ @cpp_name@ {};\n"
     )
+    from .types import _get_active_context
+
+    _ctx = _get_active_context()
+    _ctx_dicts = _ctx.dictionaries if _ctx is not None else {}
+
+    def _lookup_dict(dname):
+        return interface.dictionaries.get(dname) or _ctx_dicts.get(dname)
+
     current_name = name
     while True:
-        dictionary = interface.dictionaries[current_name]
+        dictionary = _lookup_dict(current_name)
+        if dictionary is None:
+            break
         members = list(dictionary.members)
         for partial in interface.partial_dictionaries.get(current_name, []):
             members.extend(partial.members)
@@ -248,15 +283,19 @@ def _generate_to_dictionary(generator, type_, interface: Interface) -> None:
             _DICTIONARY_INDEX[0] += 1
         if not dictionary.parent_name:
             break
-        if dictionary.parent_name not in interface.dictionaries:
+        if _lookup_dict(dictionary.parent_name) is None:
             break
         current_name = dictionary.parent_name
 
 
 def _generate_to_callback_function(generator, type_, interface: Interface, *, optional) -> None:
     """Port of generate_callback_function_to_cpp (IDLGenerators.cpp:1184-1220)."""
+    from .types import _get_active_context
+
     g = generator
-    callback = interface.callback_functions[type_.name]
+    _ctx = _get_active_context()
+    _ctx_cbs = _ctx.callback_functions if _ctx is not None else {}
+    callback = interface.callback_functions.get(type_.name) or _ctx_cbs[type_.name]
     if callback.return_type and callback.return_type.kind == "parameterized" and callback.return_type.name == "Promise":
         g.set("operation_returns_promise", "WebIDL::OperationReturnsPromise::Yes")
     else:
@@ -501,9 +540,21 @@ def _generate_to_object(g, type_, *, optional):
         )
 
 
+def _lookup_enum(name: str, interface: Interface):
+    """Look up an enumeration by name, checking interface first then global context."""
+    if name in interface.enumerations:
+        return interface.enumerations[name]
+    from .types import _get_active_context
+
+    ctx = _get_active_context()
+    if ctx is not None:
+        return ctx.enumerations.get(name)
+    return None
+
+
 def _generate_to_enum(g, type_, interface: Interface, *, optional, optional_default_value, throw_on_invalid=True):
     """Port of generate_enum_to_cpp (IDLGenerators.cpp:1054-1112)."""
-    enum = interface.enumerations[type_.name]
+    enum = _lookup_enum(type_.name, interface)
     if optional_default_value is not None:
         default_name = optional_default_value
         if default_name.startswith('"') and default_name.endswith('"'):
@@ -621,11 +672,24 @@ def _to_snake(s):
 
 
 def _find_callback_interface(interface: Interface, type_name: str):
-    """Walk imported_interfaces looking for a callback interface with this name.
+    """Find a callback interface by name.
+
+    In batch mode, looks up directly in the global context (no imported_interfaces).
+    Falls back to BFS over imported_interfaces for old single-file mode.
 
     Mirrors the semantics of IDL::Interface::referenced_interface +
     callback_interface_for_type from IDLGenerators.cpp.
     """
+    from .types import _get_active_context
+
+    _ctx = _get_active_context()
+    if _ctx is not None:
+        ctx_iface = _ctx.interfaces.get(type_name)
+        if ctx_iface is not None and ctx_iface.is_callback_interface:
+            return ctx_iface
+        return None
+
+    # Old single-file mode: BFS over imported_interfaces.
     seen: set[str] = set()
     queue = [interface]
     while queue:
@@ -643,7 +707,9 @@ def _find_callback_interface(interface: Interface, type_name: str):
 
 def _generate_to_callback_interface(g, type_, callback_interface) -> None:
     """Port of generate_callback_interface_to_cpp (IDLGenerators.cpp:761-785)."""
-    g.set("cpp_type", callback_interface.implemented_name)
+    # Use fully_qualified_name (e.g. DOM::IDLEventListener) when available,
+    # mirroring interface_cpp_type_name() in IDLGenerators.cpp:60-65.
+    g.set("cpp_type", callback_interface.fully_qualified_name or callback_interface.implemented_name)
     if type_.nullable:
         g.append(
             "\n"
@@ -803,13 +869,19 @@ def _idl_type_name_to_cpp_type(t, interface) -> tuple[str, str]:
             return ("GC::Root<WebIDL::CallbackType>", "GC::RootVector")
         cb_iface = _find_callback_interface(interface, t.name)
         if cb_iface is not None:
-            return (f"GC::Root<{cb_iface.implemented_name}>", "GC::RootVector")
-        if t.name in interface.enumerations:
+            cb_cpp = cb_iface.fully_qualified_name or cb_iface.implemented_name
+            return (f"GC::Root<{cb_cpp}>", "GC::RootVector")
+        if _lookup_enum(t.name, interface) is not None:
             return (t.name, "Vector")
-        if t.name in interface.dictionaries:
-            return (t.name, "Vector")
-        # Platform object.
-        return (f"GC::Root<{t.name}>", "GC::RootVector")
+        from .types import _cpp_type_name as _cptn
+        from .types import _get_active_context as _gac
+
+        _ctx_seq = _gac()
+        _ctx_dicts_seq = _ctx_seq.dictionaries if _ctx_seq is not None else {}
+        if t.name in interface.dictionaries or t.name in _ctx_dicts_seq:
+            return (_cptn(t), "Vector")
+        # Platform object — use fully-qualified name from context when available.
+        return (f"GC::Root<{_cptn(t)}>", "GC::RootVector")
     if is_string(t):
         if "Utf16" in t.name:
             return ("Utf16String", "Vector")
@@ -979,8 +1051,15 @@ def _generate_to_union(
 
     types = flattened_member_types(type_)
 
-    # Dictionary lookup — iterate interface.dictionaries to match the C++ ordering.
+    # Dictionary lookup — iterate interface.dictionaries to match the C++ ordering,
+    # then fall back to global context dictionaries.
+    from .types import _cpp_type_name
+    from .types import _get_active_context
+
+    _ctx_union = _get_active_context()
+    _ctx_dicts_union = _ctx_union.dictionaries if _ctx_union is not None else {}
     dictionary_type = None
+    # Check interface-local dictionaries first (C++ ordering).
     for dict_name in interface.dictionaries:
         for t in types:
             if t.name == dict_name:
@@ -988,10 +1067,16 @@ def _generate_to_union(
                 break
         if dictionary_type is not None:
             break
+    # Fall back to global context dictionaries.
+    if dictionary_type is None:
+        for t in types:
+            if t.name in _ctx_dicts_union:
+                dictionary_type = t
+                break
 
     if dictionary_type is not None:
         dg = ug.fork()
-        dg.set("dictionary.type", dictionary_type.name)
+        dg.set("dictionary.type", _cpp_type_name(dictionary_type))
         dg.append(
             "\n"
             "    auto @js_name@@js_suffix@_to_dictionary = [&vm, &realm](JS::Value @js_name@@js_suffix@) -> JS::ThrowCompletionOr<@dictionary.type@> {\n"
@@ -1054,7 +1139,7 @@ def _generate_to_union(
             if not _is_platform_object_name(t.name):
                 continue
             pg = ug.fork()
-            pg.set("platform_object_type", t.name)
+            pg.set("platform_object_type", _cpp_type_name(t))
             pg.append(
                 "\n"
                 "                if (auto* @js_name@@js_suffix@_result = as_if<@platform_object_type@>(@js_name@@js_suffix@_object))\n"
@@ -1068,7 +1153,7 @@ def _generate_to_union(
     if includes_window_proxy:
         ug.append(
             "\n"
-            "            if (auto* @js_name@@js_suffix@_result = as_if<WindowProxy>(@js_name@@js_suffix@_object))\n"
+            "            if (auto* @js_name@@js_suffix@_result = as_if<HTML::WindowProxy>(@js_name@@js_suffix@_object))\n"
             "                return GC::make_root(*@js_name@@js_suffix@_result);\n"
         )
 
@@ -1245,7 +1330,7 @@ def _generate_to_union(
             "\n        if (@js_name@@js_suffix@.is_bigint())\n            return @js_name@@js_suffix@.as_bigint();\n"
         )
 
-    includes_enumeration = any(t.name in interface.enumerations for t in types)
+    includes_enumeration = any(_lookup_enum(t.name, interface) is not None for t in types)
     if includes_enumeration:
         ug.append(
             "\n"
@@ -1253,9 +1338,9 @@ def _generate_to_union(
             "            auto @js_name@@js_suffix@_enum_string = TRY(@js_name@@js_suffix@.to_string(vm));\n"
         )
         for t in types:
-            if t.name not in interface.enumerations:
+            enum = _lookup_enum(t.name, interface)
+            if enum is None:
                 continue
-            enum = interface.enumerations[t.name]
             enum_cpp, _ = _idl_type_name_to_cpp_type(t, interface)
             eg = ug.fork()
             eg.set("enum.type", enum_cpp)

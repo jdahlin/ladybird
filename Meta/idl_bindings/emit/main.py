@@ -17,9 +17,18 @@ from .prototype import generate_prototype_header
 from .prototype import generate_prototype_implementation
 from .source_generator import SourceGenerator
 from .source_generator import StringBuilder
+from .types import _set_active_context
 
 
-def generate_header(interface: Interface) -> str:
+def generate_header(interface: Interface, context=None) -> str:
+    _set_active_context(context)
+    try:
+        return _generate_header_impl(interface)
+    finally:
+        _set_active_context(None)
+
+
+def _generate_header_impl(interface: Interface) -> str:
     builder = StringBuilder()
     g = SourceGenerator(builder)
 
@@ -54,15 +63,27 @@ def generate_header(interface: Interface) -> str:
     return builder.to_string()
 
 
-def generate_implementation(interface: Interface) -> str:
+def generate_implementation(interface: Interface, context=None) -> str:
+    _set_active_context(context)
+    try:
+        return _generate_implementation_impl(interface, context)
+    finally:
+        _set_active_context(None)
+
+
+def _generate_implementation_impl(interface: Interface, context=None) -> str:
     from .to_cpp import _DICTIONARY_INDEX
 
-    _DICTIONARY_INDEX[0] = 0
+    # Reset counter only in single-file (no context) mode.  In batch mode the
+    # caller manages the counter so it accumulates across files, matching the
+    # C++ static variable (IDLGenerators.cpp:729: `static auto i = 0`).
+    if context is None:
+        _DICTIONARY_INDEX[0] = 0
 
     builder = StringBuilder()
     g = SourceGenerator(builder)
 
-    generate_implementation_prologue(interface, g)
+    generate_implementation_prologue(interface, g, context=context)
 
     if interface.is_namespace:
         _generate_namespace_implementation(interface, g)

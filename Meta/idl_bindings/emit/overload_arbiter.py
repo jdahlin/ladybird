@@ -139,6 +139,15 @@ def generate_overload_arbiter(
         g.set("class_name", class_name)
     g.set("function.name:snakecase", _make_input_acceptable_cpp(_to_snakecase(overload_set_key)))
 
+    from .types import _get_active_context as _gac_oa
+
+    _ctx_oa = _gac_oa()
+
+    def _is_dictionary_type(name: str) -> bool:
+        if name in interface.dictionaries:
+            return True
+        return _ctx_oa is not None and name in _ctx_oa.dictionaries
+
     dictionary_types: list[str] = []
     seen: set[str] = set()
 
@@ -179,7 +188,7 @@ def generate_overload_arbiter(
         g.set("current_argument_count", str(argument_count))
         if len(eos) == 1:
             for t in eos[0].types:
-                if t.name in interface.dictionaries and t.name not in seen:
+                if _is_dictionary_type(t.name) and t.name not in seen:
                     seen.add(t.name)
                     dictionary_types.append(t.name)
             g.set("overload.callable_id", str(eos[0].callable_id))
@@ -203,7 +212,7 @@ def generate_overload_arbiter(
                 types_strs = []
                 opts_strs = []
                 for typ, opt in zip(it.types, it.optionality_values, strict=True):
-                    if typ.name in interface.dictionaries and typ.name not in seen:
+                    if _is_dictionary_type(typ.name) and typ.name not in seen:
                         seen.add(typ.name)
                         dictionary_types.append(typ.name)
                     types_strs.append(_generate_constructor_for_idl_type(typ))

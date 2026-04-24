@@ -1,77 +1,25 @@
 """Implementation file prologue — port of generate_implementation_prologue
-(IDLGenerators.cpp:6122-6195) and emit_includes_for_all_imports
-(IDLGenerators.cpp:465-497) and generate_using_namespace_definitions
-(IDLGenerators.cpp:5418-5475).
+(IDLGenerators.cpp:6122-6195) and emit_includes_for_all_dependencies
+(new batch-mode architecture from PR #9064).
 
 The prologue is the giant fixed include block + the per-interface include
-+ the using-namespace block + the `namespace Web::Bindings {` opener that
-sits at the top of every generated .cpp.
++ the `namespace Web::Bindings {` opener that sits at the top of every
+generated .cpp.
+
+PR #9064 changes:
+- Added `#include <LibWeb/DOM/Document.h>` to the fixed block.
+- Removed the `using namespace Web::*` block entirely.
+- Replaced BFS over imported_interfaces with semantic type traversal
+  (emit_includes_for_all_dependencies) that collects modules by looking
+  at which types are actually referenced in the interface.
 """
 
 from __future__ import annotations
 
-from collections import deque
 from pathlib import Path
 
 from ..ast import Interface
 from .source_generator import SourceGenerator
-
-# IDLGenerators.cpp:5418-5475 (generate_using_namespace_definitions).
-# Order is significant — must match the C++ exactly to keep parity.
-_USING_NAMESPACES = (
-    "Web::Animations",
-    "Web::Clipboard",
-    "Web::ContentSecurityPolicy",
-    "Web::CookieStore",
-    "Web::CredentialManagement",
-    "Web::Crypto",
-    "Web::CSS",
-    "Web::DOM",
-    "Web::DOMURL",
-    "Web::Encoding",
-    "Web::EncryptedMediaExtensions",
-    "Web::EntriesAPI",
-    "Web::EventTiming",
-    "Web::Fetch",
-    "Web::FileAPI",
-    "Web::Gamepad",
-    "Web::Geolocation",
-    "Web::Geometry",
-    "Web::HighResolutionTime",
-    "Web::HTML",
-    "Web::IndexedDB",
-    "Web::Internals",
-    "Web::IntersectionObserver",
-    "Web::MediaCapabilitiesAPI",
-    "Web::MediaCapture",
-    "Web::MediaSourceExtensions",
-    "Web::NavigationTiming",
-    "Web::NotificationsAPI",
-    "Web::PerformanceTimeline",
-    "Web::RequestIdleCallback",
-    "Web::ResizeObserver",
-    "Web::ResourceTiming",
-    "Web::Selection",
-    "Web::Serial",
-    "Web::ServiceWorker",
-    "Web::Speech",
-    "Web::StorageAPI",
-    "Web::Streams",
-    "Web::SVG",
-    "Web::TrustedTypes",
-    "Web::UIEvents",
-    "Web::URLPattern",
-    "Web::UserTiming",
-    "Web::WebAssembly",
-    "Web::WebAudio",
-    "Web::WebGL",
-    "Web::WebGL::Extensions",
-    "Web::WebIDL",
-    "Web::WebVTT",
-    "Web::WebXR",
-    "Web::XHR",
-    "Web::XPath",
-)
 
 
 def _will_generate_code(interface: Interface) -> bool:
@@ -88,10 +36,9 @@ def _will_generate_code(interface: Interface) -> bool:
 def _generate_include_for_interface(generator: SourceGenerator, interface: Interface) -> None:
     """Mirror IDLGenerators.cpp:445-463 (generate_include_for_interface).
 
-    Computes a header path relative to known search paths. Without a runtime
-    `g_header_search_paths`, we just emit the absolute path the same way the
-    C++ tool does when it finds no match — that's still byte-identical for
-    the corpus we care about.
+    In batch mode (no -i flag), g_header_search_paths is empty so the path
+    is used as-is (absolute). We replicate that: use the absolute IDL path
+    with .h extension, using ImplementedAs if present.
     """
     g = generator.fork()
     path_string = interface.filename or ""
@@ -101,45 +48,208 @@ def _generate_include_for_interface(generator: SourceGenerator, interface: Inter
     g.append("\n#include <@include.path@>\n")
 
 
-def emit_includes_for_all_imports(
+def emit_includes_for_all_dependencies(
     interface: Interface,
     generator: SourceGenerator,
+    context=None,
     is_iterator: bool = False,
     is_async_iterator: bool = False,
 ) -> None:
-    # IDLGenerators.cpp:465-497. Mirrors the post-f25bfd747a structure:
-    # - The main interface is emitted BEFORE the BFS (if will_generate_code()).
-    # - Imported modules are enqueued in BFS order, but an include is only
-    #   generated for modules that have a primary interface (non-empty name).
-    #   This mirrors the C++ check `module->interface.has_value()`, which is
-    #   only set when `!interface.name.is_empty()` (IDLParser.cpp:1487-1488).
-    #   Dict/enum-only files (no primary interface) are traversed for their
-    #   sub-imports but do NOT themselves generate an #include via the BFS.
-    # Mirrors the post-f25bfd747a C++ structure:
-    # 1. Mark main interface as visited, emit its include if will_generate_code().
-    # 2. BFS over imports. For imported modules, only emit an include if the
-    #    file has a primary interface (non-empty name). Dict/enum-only files
-    #    (like QueuingStrategy.idl) are traversed for sub-imports but do not
-    #    themselves generate an #include. This mirrors the C++ check
-    #    `module->interface.has_value()`, which is only set for non-empty-name
-    #    interfaces (IDLParser.cpp:1487-1488).
-    seen: set[str] = {interface.filename}
-    queue: deque[Interface] = deque(interface.imported_interfaces)
+    """New semantic include traversal from PR #9064.
 
-    if _will_generate_code(interface):
-        _generate_include_for_interface(generator, interface)
+    Collects all modules (interfaces, dictionaries, etc.) that are actually
+    referenced by this interface's members. Emits an #include for each that
+    will_generate_code(), sorted by module_own_path.
 
-    while queue:
-        i = queue.popleft()
-        if i.filename in seen:
-            continue
-        seen.add(i.filename)
-        for imp in i.imported_interfaces:
-            if imp.filename not in seen:
-                queue.append(imp)
-        if not i.name:
-            continue
-        _generate_include_for_interface(generator, i)
+    In batch mode (context is not None), types are looked up in the global
+    context registry. Falls back to the BFS-over-imports strategy when no
+    context is available (old single-file mode).
+    """
+    # Collect all interfaces that need to be included by traversing types.
+    seen_paths: set[str] = set()
+    modules_to_include: list[Interface] = []
+
+    def add_interface(iface: Interface) -> None:
+        path = iface.filename
+        if not path or path in seen_paths:
+            return
+        if not _will_generate_code(iface):
+            return
+        seen_paths.add(path)
+        modules_to_include.append(iface)
+
+    # Build a reverse map from IDL path → primary interface so we can add
+    # includes for files that define enumerations or dictionaries (which
+    # aren't themselves interfaces but live in a file that has one).
+    _path_to_interface: dict[str, Interface] = {}
+    if context is not None:
+        for _mod in context.modules:
+            if _mod.interface is not None and _mod.module_own_path:
+                _path_to_interface[_mod.module_own_path] = _mod.interface
+
+    def add_include_for_path(path: str) -> None:
+        iface = _path_to_interface.get(path)
+        if iface is not None:
+            add_interface(iface)
+
+    def lookup_interface_by_name(name: str):
+        """Look up an interface by type name, using context first."""
+        if context is not None:
+            return context.interfaces.get(name)
+        for imp in interface.imported_interfaces:
+            if imp.name == name:
+                return imp
+        return None
+
+    def collect_from_type(type_obj) -> None:
+        if type_obj is None:
+            return
+        if type_obj.kind == "parameterized":
+            for param in type_obj.parameters:
+                collect_from_type(param)
+            return
+        if type_obj.kind == "union":
+            for member in type_obj.union_member_types:
+                collect_from_type(member)
+            return
+        # Plain type: look up in context or imported_interfaces.
+        iface = lookup_interface_by_name(type_obj.name)
+        if iface is not None:
+            add_interface(iface)
+            return
+        if context is not None:
+            # If the type is an enumeration, include the file that defines it.
+            # Mirrors add_enumeration_include_dependency (IDLGenerators.cpp:385).
+            enum_obj = context.enumerations.get(type_obj.name)
+            if enum_obj is not None and enum_obj.module_own_path:
+                add_include_for_path(enum_obj.module_own_path)
+                return
+
+            # If the type is a dictionary, include its file and recurse into it.
+            # Mirrors add_dictionary_include_dependency (IDLGenerators.cpp:377).
+            dict_obj = context.dictionaries.get(type_obj.name)
+            if dict_obj is None:
+                dict_obj = interface.dictionaries.get(type_obj.name)
+            if dict_obj is not None:
+                if dict_obj.module_own_path:
+                    add_include_for_path(dict_obj.module_own_path)
+                # Also recurse into dictionary members so referenced types get included.
+                collect_from_dictionary_chain(type_obj.name, set())
+                return
+
+            # If the type is a callback function, traverse its parameter types
+            # and return type so any referenced interfaces are included.
+            cb = context.callback_functions.get(type_obj.name)
+            if cb is not None:
+                if cb.return_type is not None:
+                    collect_from_type(cb.return_type)
+                for param in cb.parameters:
+                    if param.type is not None:
+                        collect_from_type(param.type)
+                return
+            # If the type is a typedef, resolve it and recurse.
+            td = context.typedefs.get(type_obj.name)
+            if td is None:
+                td = interface.typedefs.get(type_obj.name)
+            if td is not None and td.type is not None:
+                collect_from_type(td.type)
+
+    def _lookup_dict(name):
+        d = interface.dictionaries.get(name)
+        if d is not None:
+            return d
+        if context is not None:
+            return context.dictionaries.get(name)
+        return None
+
+    def collect_from_dictionary_chain(dict_name: str, visited: set, *, add_self_include: bool = False) -> None:
+        """Traverse dictionary and all parent dictionaries for type includes."""
+        if dict_name in visited:
+            return
+        visited.add(dict_name)
+        dictionary = _lookup_dict(dict_name)
+        if dictionary is None:
+            return
+        # Add file include for this dictionary (mirrors C++ add_dictionary_include_dependency).
+        # The top-level call from collect_from_type already added the include, but
+        # parent chain entries need it too.
+        if add_self_include and dictionary.module_own_path:
+            add_include_for_path(dictionary.module_own_path)
+        for member in dictionary.members:
+            if member.type is not None:
+                collect_from_type(member.type)
+        if dictionary.parent_name:
+            collect_from_dictionary_chain(dictionary.parent_name, visited, add_self_include=True)
+
+    def collect_from_parameters(params) -> None:
+        for param in params:
+            if param.type is not None:
+                collect_from_type(param.type)
+
+    def collect_from_operation(op) -> None:
+        if op is None:
+            return
+        if op.return_type is not None:
+            collect_from_type(op.return_type)
+        collect_from_parameters(op.parameters)
+
+    # Add self first.
+    add_interface(interface)
+
+    # Add parent if present.
+    if interface.parent_name:
+        parent_iface = lookup_interface_by_name(interface.parent_name)
+        if parent_iface is not None:
+            add_interface(parent_iface)
+
+    # Collect from all members.
+    for attr in interface.attributes:
+        if attr.type is not None:
+            collect_from_type(attr.type)
+    for attr in interface.static_attributes:
+        if attr.type is not None:
+            collect_from_type(attr.type)
+    for const in interface.constants:
+        if const.type is not None:
+            collect_from_type(const.type)
+    for ctor in interface.constructors:
+        collect_from_parameters(ctor.parameters)
+    for fn in interface.operations:
+        collect_from_operation(fn)
+    for fn in interface.static_operations:
+        collect_from_operation(fn)
+    if interface.value_iterator_type is not None:
+        collect_from_type(interface.value_iterator_type)
+    if interface.pair_iterator_types is not None:
+        collect_from_type(interface.pair_iterator_types[0])
+        collect_from_type(interface.pair_iterator_types[1])
+    if interface.async_value_iterator_type is not None:
+        collect_from_type(interface.async_value_iterator_type)
+    collect_from_parameters(interface.async_iterator_parameters)
+    if interface.set_entry_type is not None:
+        collect_from_type(interface.set_entry_type)
+    if interface.map_key_type is not None:
+        collect_from_type(interface.map_key_type)
+    if interface.map_value_type is not None:
+        collect_from_type(interface.map_value_type)
+    collect_from_operation(interface.named_property_getter)
+    collect_from_operation(interface.named_property_setter)
+    collect_from_operation(interface.named_property_deleter)
+    collect_from_operation(interface.indexed_property_getter)
+    collect_from_operation(interface.indexed_property_setter)
+
+    # Own dictionaries: collect types used in their members and parent chain.
+    for dict_name in interface.own_dictionaries:
+        collect_from_dictionary_chain(dict_name, set())
+
+    # Sort by absolute path (mirrors C++ quick_sort by module_own_path).
+    modules_to_include.sort(key=lambda i: i.filename or "")
+
+    # Emit includes.
+    for iface in modules_to_include:
+        _generate_include_for_interface(generator, iface)
+
+    # Iterator includes.
     if is_iterator:
         iterator_path = interface.fully_qualified_name.replace("::", "/") + "Iterator"
         ig = generator.fork()
@@ -152,7 +262,11 @@ def emit_includes_for_all_imports(
         ig.append("\n#   include <LibWeb/@iterator_class.path@.h>\n")
 
 
-def generate_implementation_prologue(interface: Interface, generator: SourceGenerator) -> None:
+# Keep backward-compat alias so existing call-sites don't break during transition.
+emit_includes_for_all_imports = emit_includes_for_all_dependencies
+
+
+def generate_implementation_prologue(interface: Interface, generator: SourceGenerator, context=None) -> None:
     g = generator.fork()
     g.set("bindings_name", interface.implemented_name)
     if interface.parent_name:
@@ -161,6 +275,7 @@ def generate_implementation_prologue(interface: Interface, generator: SourceGene
     # IDLGenerators.cpp:6130-6177 — fixed include block. The leading "\n"
     # mirrors the C++ raw-string literal which starts with a newline after
     # the opening paren.
+    # PR #9064: added `#include <LibWeb/DOM/Document.h>` after Range.h.
     g.append(
         "\n"
         "#include <AK/Function.h>\n"
@@ -185,6 +300,7 @@ def generate_implementation_prologue(interface: Interface, generator: SourceGene
         "#include <LibWeb/Bindings/Intrinsics.h>\n"
         "#include <LibWeb/Bindings/MainThreadVM.h>\n"
         "#include <LibWeb/Bindings/PrincipalHostDefined.h>\n"
+        "#include <LibWeb/DOM/Document.h>\n"
         "#include <LibWeb/DOM/Element.h>\n"
         "#include <LibWeb/DOM/ElementFactory.h>\n"
         "#include <LibWeb/DOM/Event.h>\n"
@@ -221,17 +337,15 @@ def generate_implementation_prologue(interface: Interface, generator: SourceGene
             "\n"
         )
 
-    emit_includes_for_all_imports(
+    emit_includes_for_all_dependencies(
         interface,
         g,
+        context=context,
         is_iterator=interface.pair_iterator_types is not None,
         is_async_iterator=interface.async_value_iterator_type is not None,
     )
 
-    # IDLGenerators.cpp:5418-5475 (generate_using_namespace_definitions).
-    g.append("\n// FIXME: This is a total hack until we can figure out the namespace for a given type somehow.\n")
-    for ns in _USING_NAMESPACES:
-        g.append(f"using namespace {ns};\n")
+    # PR #9064: No more `using namespace Web::*` block.
 
     # IDLGenerators.cpp:6191-6193 — namespace open.
     g.append("\nnamespace Web::Bindings {\n\n")

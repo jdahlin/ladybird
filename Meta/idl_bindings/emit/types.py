@@ -14,6 +14,22 @@ from ..ast import Interface
 from ..ast import Type
 from .source_generator import SourceGenerator
 
+# Module-level context set during batch generation.  The generator sets this
+# before calling generate_header/generate_implementation so that type helpers
+# can look up globally declared interfaces, dictionaries, enumerations, etc.
+# without requiring context to be threaded through every helper signature.
+_active_context = None
+
+
+def _set_active_context(ctx) -> None:
+    global _active_context
+    _active_context = ctx
+
+
+def _get_active_context():
+    return _active_context
+
+
 # IDL integer-type → C++ alias used in wrap statements.
 # Mirrors the table in generate_from_integral (IDLGenerators.cpp:589-598).
 _IDL_INTEGER_TO_CPP_WRAP = {
@@ -139,9 +155,11 @@ _PLATFORM_OBJECT_TYPES = frozenset(
         "ReadableStream",
         "Request",
         "Response",
+        "ResizeObserverSize",
         "Selection",
         "ServiceWorkerContainer",
         "ServiceWorkerRegistration",
+        "StaticRange",
         "SVGLength",
         "SVGNumber",
         "SVGTransform",
@@ -231,14 +249,20 @@ def is_primitive(type_: Type) -> bool:
 
 
 def is_enum(type_: Type, interface: Interface) -> bool:
-    return type_.kind == "plain" and type_.name in interface.enumerations
+    if type_.kind != "plain":
+        return False
+    if type_.name in interface.enumerations:
+        return True
+    if _active_context is not None and type_.name in _active_context.enumerations:
+        return True
+    return False
 
 
 def is_json(type_: Type, interface: Interface) -> bool:
     """Port of Type::is_json (Types.cpp:192-...)."""
     if is_primitive(type_):
         return True
-    if is_string(type_) or type_.name in interface.enumerations:
+    if is_string(type_) or is_enum(type_, interface):
         return True
     if type_.name == "object":
         return True
@@ -253,27 +277,33 @@ def is_json(type_: Type, interface: Interface) -> bool:
     if type_.name in interface.dictionaries:
         d = interface.dictionaries[type_.name]
         return all(is_json(m.type, interface) for m in d.members if m.type is not None)
+    # Also resolve typedefs from global context.
+    if type_.kind == "plain" and _active_context is not None:
+        td = _active_context.typedefs.get(type_.name)
+        if td is not None and td.type is not None:
+            return is_json(td.type, interface)
+
     # - interface types that have a toJSON operation declared on themselves
     #   or one of their inherited interfaces (Types.cpp:258-292).
-    cur: Interface | None = None
-    if type_.name == interface.name:
-        cur = interface
-    else:
+    def _lookup_iface(name: str):
+        if name == interface.name:
+            return interface
+        if _active_context is not None:
+            iface = _active_context.interfaces.get(name)
+            if iface is not None:
+                return iface
         for imp in interface.imported_interfaces:
-            if imp.name == type_.name:
-                cur = imp
-                break
+            if imp.name == name:
+                return imp
+        return None
+
+    cur: Interface | None = _lookup_iface(type_.name)
     while cur is not None:
         if any(op.name == "toJSON" for op in cur.operations):
             return True
         if not cur.parent_name:
             break
-        nxt = None
-        for imp in cur.imported_interfaces:
-            if imp.name == cur.parent_name:
-                nxt = imp
-                break
-        cur = nxt
+        cur = _lookup_iface(cur.parent_name)
     return False
 
 
@@ -307,14 +337,17 @@ def generate_wrap_statement(
         g.append("\n    @result_expression@ JS::js_undefined();\n")
         return
 
+    _ctx_dicts_wrap = _active_context.dictionaries if _active_context is not None else {}
+    _is_dict_type = type_.name in interface.dictionaries or type_.name in _ctx_dicts_wrap
+
     # IDLGenerators.cpp:2017-2025 + the enum special case at 2244-2245.
     uses_value_access = is_optional and (
         type_.kind == "union"
         or is_string(type_)
         or type_.name in ("sequence", "FrozenArray")
         or is_primitive(type_)
-        or type_.name in interface.enumerations
-        or type_.name in interface.dictionaries
+        or is_enum(type_, interface)
+        or _is_dict_type
     )
     # Enums also use .value() for *nullable* (not just optional), per
     # IDLGenerators.cpp:2244 (set value to value.value() when nullable too).
@@ -332,8 +365,8 @@ def generate_wrap_statement(
             is_string(type_)
             or type_.name in ("sequence", "FrozenArray")
             or is_primitive(type_)
-            or type_.name in interface.enumerations
-            or type_.name in interface.dictionaries
+            or is_enum(type_, interface)
+            or _is_dict_type
         ):
             g.append("\n    if (@value@.has_value()) {\n")
         else:
@@ -396,10 +429,31 @@ def generate_wrap_statement(
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
-    if type_.kind == "plain" and type_.name in interface.callback_functions:
+    # Resolve typedef before checking callback functions (e.g. EventHandler → EventHandlerNonNull?).
+    _resolve_type = type_
+    if type_.kind == "plain" and _active_context is not None:
+        _td = _active_context.typedefs.get(type_.name) or interface.typedefs.get(type_.name)
+        if _td is not None and _td.type is not None:
+            _resolve_type = _td.type
+
+    _ctx_cbs = _active_context.callback_functions if _active_context is not None else {}
+    _check_cb_name = _resolve_type.name
+    _check_cb_nullable = _resolve_type.nullable or type_.nullable
+    if _resolve_type.kind == "plain" and (_check_cb_name in interface.callback_functions or _check_cb_name in _ctx_cbs):
         # IDLGenerators.cpp:2249-2268.
-        callback = interface.callback_functions[type_.name]
-        if callback.is_legacy_treat_non_object_as_null and not type_.nullable:
+        callback = interface.callback_functions.get(_check_cb_name) or _ctx_cbs[_check_cb_name]
+        if _check_cb_nullable:
+            # Nullable callback: generate an explicit null-check form (IDLGenerators.cpp:2249-2257).
+            g.append(
+                "\n"
+                "  if (!@value_non_optional@) {\n"
+                "      @result_expression@ JS::js_null();\n"
+                "  } else {\n"
+                "      @result_expression@ @value_non_optional@->callback;\n"
+                "  }\n"
+            )
+        elif callback.is_legacy_treat_non_object_as_null:
+            # Non-nullable LegacyTreatNonObjectAsNull: still check null (IDLGenerators.cpp:2258-2268).
             g.append(
                 "\n"
                 "  if (!@value_non_optional@) {\n"
@@ -413,7 +467,8 @@ def generate_wrap_statement(
         _close_wrap_if(g, type_, is_optional, wrap_in_if)
         return
 
-    if type_.kind == "plain" and type_.name in interface.dictionaries:
+    _ctx_dicts = _active_context.dictionaries if _active_context is not None else {}
+    if type_.kind == "plain" and (type_.name in interface.dictionaries or type_.name in _ctx_dicts):
         # IDLGenerators.cpp:2273-2336 — wrap a struct into a JS object by
         # iterating each member and create_data_property'ing it.
         # Use value_non_optional_str so optional outer values are unwrapped
@@ -604,11 +659,29 @@ _JS_BUILTIN_BUFFER_TYPES = frozenset(
 
 
 def _cpp_type_name(type_: Type) -> str:
-    """Subset of cpp_type_name (IDLGenerators.cpp:225-234)."""
-    from ..resolver import _libweb_interface_namespaces
+    """Subset of cpp_type_name (IDLGenerators.cpp:225-234).
 
-    if type_.name in _libweb_interface_namespaces():
-        return f"{type_.name}::{type_.name}"
+    Also mirrors interface_cpp_type_name(Context, Type) which special-cases
+    WindowProxy (IDLGenerators.cpp:68-80).
+    """
+    from ..resolver import cpp_namespace_for_module_path
+
+    # WindowProxy is not declared in an IDL file; always emit the hard-coded FQN.
+    # Mirrors IDLGenerators.cpp:69-70.
+    if type_.name == "WindowProxy":
+        return "HTML::WindowProxy"
+
+    # In batch mode, look up the fully-qualified name from the global context.
+    if _active_context is not None:
+        iface = _active_context.interfaces.get(type_.name)
+        if iface is not None and iface.fully_qualified_name:
+            return iface.fully_qualified_name
+        # Dictionaries: derive FQN from their module_own_path.
+        dictionary = _active_context.dictionaries.get(type_.name)
+        if dictionary is not None and dictionary.module_own_path:
+            ns = cpp_namespace_for_module_path(dictionary.module_own_path)
+            if ns:
+                return f"{ns}::{type_.name}"
     if type_.name in _JS_BUILTIN_BUFFER_TYPES:
         return f"JS::{type_.name}"
     return type_.name
@@ -629,13 +702,18 @@ def idl_type_name_to_cpp_type(type_: Type, interface: Interface) -> tuple[str, s
 
     name = type_.name
     if type_.kind == "plain" and _is_platform_object_name(name):
-        return (f"GC::Root<{name}>", _SEQ_STORAGE_ROOT_VECTOR)
+        # Use the fully-qualified name when the global context is available.
+        # WindowProxy has no IDL file; hard-code its namespace (IDLGenerators.cpp:69-70).
+        fqn = _cpp_type_name(type_)
+        return (f"GC::Root<{fqn}>", _SEQ_STORAGE_ROOT_VECTOR)
     if type_.kind == "plain" and name in _JS_BUILTIN_BUFFER_TYPES:
         return (f"GC::Root<JS::{name}>", _SEQ_STORAGE_ROOT_VECTOR)
     cb_iface = _find_callback_interface(interface, name)
     if cb_iface is not None:
-        return (f"GC::Root<{cb_iface.implemented_name}>", _SEQ_STORAGE_ROOT_VECTOR)
-    if name in interface.callback_functions:
+        cb_cpp_name = cb_iface.fully_qualified_name or cb_iface.implemented_name
+        return (f"GC::Root<{cb_cpp_name}>", _SEQ_STORAGE_ROOT_VECTOR)
+    ctx_cbs = _active_context.callback_functions if _active_context is not None else {}
+    if name in interface.callback_functions or name in ctx_cbs:
         return ("GC::Root<WebIDL::CallbackType>", _SEQ_STORAGE_ROOT_VECTOR)
     if is_string(type_):
         if "Utf16" in name:
@@ -669,8 +747,6 @@ def idl_type_name_to_cpp_type(type_: Type, interface: Interface) -> tuple[str, s
         return ("GC::Root<WebIDL::BufferSource>", _SEQ_STORAGE_ROOT_VECTOR)
     if name == "ArrayBufferView":
         return ("GC::Root<WebIDL::ArrayBufferView>", _SEQ_STORAGE_ROOT_VECTOR)
-    if name == "Function":
-        return ("GC::Ref<WebIDL::CallbackType>", _SEQ_STORAGE_ROOT_VECTOR)
     if name == "Promise":
         return ("GC::Root<WebIDL::Promise>", _SEQ_STORAGE_ROOT_VECTOR)
     if name in ("sequence", "FrozenArray"):
@@ -685,9 +761,13 @@ def idl_type_name_to_cpp_type(type_: Type, interface: Interface) -> tuple[str, s
         return (f"OrderedHashMap<{k_cpp}, {v_cpp}>", _SEQ_STORAGE_VECTOR)
     if type_.kind == "union":
         return (union_type_to_variant(type_, interface), _SEQ_STORAGE_VECTOR)
-    if not type_.nullable and name in interface.dictionaries:
-        return (name, _SEQ_STORAGE_VECTOR)
-    if name in interface.enumerations:
+    ctx_dicts = _active_context.dictionaries if _active_context is not None else {}
+    ctx_enums = _active_context.enumerations if _active_context is not None else {}
+    if not type_.nullable and (name in interface.dictionaries or name in ctx_dicts):
+        # Use the qualified name from the context if available.
+        cpp_name = _cpp_type_name(type_)
+        return (cpp_name, _SEQ_STORAGE_VECTOR)
+    if name in interface.enumerations or name in ctx_enums:
         return (name, _SEQ_STORAGE_VECTOR)
     raise NotImplementedError(f"idl_type_name_to_cpp_type for {name!r} (kind={type_.kind})")
 
@@ -772,8 +852,8 @@ def _generate_dictionary_wrap(g, type_, value, interface: Interface, recursion_d
         "        auto dictionary_object@recursion_depth@ = JS::Object::create(realm, realm.intrinsics().object_prototype());\n"
     )
     next_iteration = iteration_index + 1
-    current = interface.dictionaries[type_.name]
-    current_name = type_.name
+    _ctx_dicts3 = _active_context.dictionaries if _active_context is not None else {}
+    current = interface.dictionaries.get(type_.name) or _ctx_dicts3[type_.name]
     while True:
         for member in current.members:
             g.set("member_key", member.name)
@@ -816,8 +896,11 @@ def _generate_dictionary_wrap(g, type_, value, interface: Interface, recursion_d
                     "\n"
                     '        MUST(dictionary_object@recursion_depth@->create_data_property("@member_key@"_utf16_fly_string, @wrapped_value_name@));\n'
                 )
-        if not current.parent_name or current.parent_name not in interface.dictionaries:
+        _ctx_dicts2 = _active_context.dictionaries if _active_context is not None else {}
+        if not current.parent_name:
             break
-        current_name = current.parent_name
-        current = interface.dictionaries[current_name]
+        next_dict = interface.dictionaries.get(current.parent_name) or _ctx_dicts2.get(current.parent_name)
+        if next_dict is None:
+            break
+        current = next_dict
     g.append("\n        @result_expression@ dictionary_object@recursion_depth@;\n    }\n")

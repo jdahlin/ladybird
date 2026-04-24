@@ -67,6 +67,9 @@ class Enumeration:
     # set False when an enum is re-declared (Ladybird allows this for the
     # purpose of populating a partial-spec stub).
     is_original_definition: bool = True
+    # Absolute path of the IDL file that declared this enumeration.
+    # Mirrors IDL::Enumeration::module_own_path (PR #9064).
+    module_own_path: str = ""
 
 
 # §2.5.4 Operations / §2.5.6 Callback functions — Parameter is shared between
@@ -175,6 +178,9 @@ class Dictionary:
     members: list[DictionaryMember] = field(default_factory=list)
     # `is_original_definition` mirrors IDL::Dictionary::is_original_definition.
     is_original_definition: bool = True
+    # Absolute path of the IDL file that declared this dictionary.
+    # Mirrors IDL::Dictionary::module_own_path (PR #9064).
+    module_own_path: str = ""
 
 
 # §2.5 InterfaceLike — top-level container that aggregates everything parsed
@@ -199,6 +205,9 @@ class Interface:
     is_namespace: bool = False
     is_mixin: bool = False
     is_callback_interface: bool = False
+    # True for `partial interface Foo { ... }` declarations.
+    # Mirrors IDL::Interface::is_partial (PR #9064).
+    is_partial: bool = False
 
     # ExtendedAttributeList attached to the primary interface declaration.
     extended_attributes: dict[str, str] = field(default_factory=dict)
@@ -260,6 +269,13 @@ class Interface:
     partial_mixins: list["Interface"] = field(default_factory=list)
     partial_namespaces: list["Interface"] = field(default_factory=list)
     partial_dictionaries: dict[str, list[Dictionary]] = field(default_factory=dict)
+
+    # Names of dictionaries declared in THIS file (not imported).
+    # Mirrors IDL::Interface::own_dictionaries (PR #9064).
+    own_dictionaries: list[str] = field(default_factory=list)
+    # Names of enumerations declared in THIS file (not imported).
+    # Mirrors IDL::Interface::own_enumerations (PR #9064).
+    own_enumerations: list[str] = field(default_factory=list)
 
     # `imported_modules` mirrors IDL::Interface::imported_modules. Populated
     # by the preprocessor pass for each `#import` directive that resolves.

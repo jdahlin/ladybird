@@ -18,6 +18,18 @@ from ..ast import Interface
 from .source_generator import SourceGenerator
 
 
+def _lookup_enum(name: str, interface: Interface):
+    """Look up an enumeration by name, checking interface first then global context."""
+    if name in interface.enumerations:
+        return interface.enumerations[name]
+    from .types import _get_active_context
+
+    ctx = _get_active_context()
+    if ctx is not None:
+        return ctx.enumerations.get(name)
+    return None
+
+
 # https://webidl.spec.whatwg.org/#es-immutable-prototype-exotic-objects
 # IDLGenerators.cpp:3731 (interface_prototype_has_immutable_prototype):
 # A platform object's prototype is *immutable* when the interface declares
@@ -218,7 +230,7 @@ def _generate_named_properties_object_declarations(interface: Interface, generat
 def _generate_named_properties_object_definitions(interface: Interface, generator: SourceGenerator) -> None:
     """Port of generate_named_properties_object_definitions (IDLGenerators.cpp:3586-3728)."""
     g = generator.fork()
-    g.set("name", interface.name)
+    g.set("name", interface.fully_qualified_name or interface.name)
     g.set("parent_name", interface.parent_name)
     g.set("prototype_base_class", interface.prototype_base_class)
     g.set("named_properties_class", f"{interface.name}Properties")
@@ -529,7 +541,7 @@ def _generate_prototype_or_global_mixin_definitions(interface: Interface, genera
     class_name = interface.global_mixin_class if is_global_interface else interface.prototype_class
 
     if interface.pair_iterator_types is not None:
-        generator.set("iterator_name", f"{interface.name}Iterator")
+        generator.set("iterator_name", f"{interface.fully_qualified_name}Iterator")
 
     # IDLGenerators.cpp:4429-4456 — impl_from helpers, emitted only when the
     # interface has at least one member that needs `impl_from`.
@@ -673,7 +685,7 @@ def _generate_setlike_definitions(interface: Interface, class_name: str, generat
     sg.set("class_name", class_name)
     if set_entry_type.kind == "plain" and (
         set_entry_type.name in ("DOMString", "USVString", "ByteString", "CSSOMString")
-        or set_entry_type.name in interface.enumerations
+        or _lookup_enum(set_entry_type.name, interface) is not None
     ):
         value_type_check = (
             "\n"
@@ -682,7 +694,15 @@ def _generate_setlike_definitions(interface: Interface, class_name: str, generat
             "    }\n"
         )
     else:
-        type_name = set_entry_type.name
+        from .types import _cpp_type_name as _ctn
+        from .types import _get_active_context as _gac
+
+        _ctx = _gac()
+        # Use FQN for platform objects (e.g. CSS::FontFace); fall back to plain name.
+        if _ctx is not None and set_entry_type.name in _ctx.interfaces:
+            type_name = _ctn(set_entry_type)
+        else:
+            type_name = set_entry_type.name
         value_type_check = (
             f"\n"
             f"    if (!value_arg.is_object() || !is<{type_name}>(value_arg.as_object())) {{\n"
@@ -1010,16 +1030,24 @@ def _generate_dictionaries(interface: Interface, generator: SourceGenerator) -> 
         snake_name = _make_input_acceptable_cpp(_to_snakecase(dict_name))
         dict_type_name = _make_input_acceptable_cpp(dict_name)
 
+        # Use namespace-qualified name when the dictionary is defined in another namespace.
+        from ..ast import Type as _Type
+        from .types import _cpp_type_name as _ctn
+
+        _dict_type_for_name = _Type(name=dict_name, nullable=False)
+        dict_qualified_name = _ctn(_dict_type_for_name)
+
         dg = generator.fork()
         dg.set("dictionary.name", dict_type_name)
         dg.set("dictionary.name:snakecase", snake_name)
+        dg.set("dictionary.qualified_name", dict_qualified_name)
         dg.append(
             "\n"
-            "JS::Value @dictionary.name:snakecase@_to_value(JS::Realm&, @dictionary.name@ const&);\n"
-            "JS::Value @dictionary.name:snakecase@_to_value(JS::Realm& realm, @dictionary.name@ const& dictionary)\n"
+            "JS::Value @dictionary.name:snakecase@_to_value(JS::Realm&, @dictionary.qualified_name@ const&);\n"
+            "JS::Value @dictionary.name:snakecase@_to_value(JS::Realm& realm, @dictionary.qualified_name@ const& dictionary)\n"
             "{\n"
             "    auto& vm = realm.vm();\n"
-            "    @dictionary.name@ copy = dictionary;\n"
+            "    @dictionary.qualified_name@ copy = dictionary;\n"
         )
         dict_type = Type(name=dict_name, nullable=False)
         generate_wrap_statement(dg, "copy", dict_type, interface, "return")
@@ -1106,7 +1134,7 @@ def _generate_async_iterator_values_definitions(
 
     ig = generator.fork()
     ig.set("class_name", class_name)
-    ig.set("iterator_name", f"{interface.name}AsyncIterator")
+    ig.set("iterator_name", f"{interface.fully_qualified_name}AsyncIterator")
 
     ig.append(
         "\n"
@@ -1201,7 +1229,7 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
             g.append('\n    auto content_attribute_value = impl->attribute("@attribute.reflect_name@"_fly_string);\n')
             if "Enumerated" in attribute.extended_attributes:
                 enum_type = attribute.extended_attributes["Enumerated"]
-                enumeration = interface.enumerations[enum_type]
+                enumeration = _lookup_enum(enum_type, interface)
                 mvd = enumeration.extended_attributes.get("MissingValueDefault", "")
                 ivd = enumeration.extended_attributes.get("InvalidValueDefault", "")
                 valid_values = ", ".join(f'"{v}"_string' for v in enumeration.values)
@@ -1245,7 +1273,7 @@ def _generate_attribute_getter(attribute, interface: Interface, class_name: str,
             )
             if "Enumerated" in attribute.extended_attributes:
                 enum_type = attribute.extended_attributes["Enumerated"]
-                enumeration = interface.enumerations[enum_type]
+                enumeration = _lookup_enum(enum_type, interface)
                 mvd = enumeration.extended_attributes.get("MissingValueDefault", "")
                 ivd = enumeration.extended_attributes.get("InvalidValueDefault", "")
                 valid_values = ", ".join(f'"{v}"_string' for v in enumeration.values)
@@ -2032,8 +2060,13 @@ def _generate_attribute_setter(attribute, interface: Interface, class_name: str,
 def _create_an_inheritance_stack(interface: Interface) -> list[Interface]:
     """Port of create_an_inheritance_stack (IDLGenerators.cpp:3370-3394).
 
-    Walks the parent chain using imported_interfaces.
+    Walks the parent chain using imported_interfaces, then falls back to the
+    global context in batch mode.
     """
+    from .types import _get_active_context
+
+    ctx = _get_active_context()
+
     stack = [interface]
     current = interface
     while current.parent_name:
@@ -2042,6 +2075,8 @@ def _create_an_inheritance_stack(interface: Interface) -> list[Interface]:
             if imported.name == current.parent_name:
                 imp = imported
                 break
+        if imp is None and ctx is not None:
+            imp = ctx.interfaces.get(current.parent_name)
         if imp is None:
             break
         stack.append(imp)

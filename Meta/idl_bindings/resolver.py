@@ -25,13 +25,390 @@ callers should pass a fresh parse() result.
 from __future__ import annotations
 
 from collections import OrderedDict
+from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
+from typing import Optional
 
+from .ast import CallbackFunction
 from .ast import Dictionary
+from .ast import Enumeration
 from .ast import Interface
 from .ast import Parameter
 from .ast import Type
+from .ast import Typedef
 from .parser import Parser
+
+# --- AK::HashTable simulation for includes ordering ---
+# C++ uses an unordered HashTable for mixin includes, so the iteration
+# order depends on the AK string hash and linear probing. We replicate
+# this to match C++ output exactly.
+
+
+def _ak_string_hash(s: str) -> int:
+    """Implements AK::string_hash from AK/HashFunctions.h."""
+    h = 0
+    for c in s:
+        h = (h + ord(c)) & 0xFFFFFFFF
+        h = (h + (h << 10)) & 0xFFFFFFFF
+        h ^= h >> 6
+    h = (h + (h << 3)) & 0xFFFFFFFF
+    h ^= h >> 11
+    h = (h + (h << 15)) & 0xFFFFFFFF
+    return h
+
+
+def _ak_hashtable_order(names: list[str]) -> list[str]:
+    """Return names in the order AK::HashTable<ByteString> would iterate them.
+
+    AK::HashTable (HashTable.h) uses Robin Hood hashing with linear probing,
+    70% load factor, and an initial capacity of at least 8. It grows BEFORE
+    inserting each element when should_grow() is true:
+        should_grow() = ((size+1)*100) >= (capacity*70)
+    and doubles to max(capacity*2, 8).
+
+    Robin Hood hashing: when inserting, if the new element's probe length
+    exceeds the occupying element's probe length, steal the bucket and
+    displace the poorer element to a later slot.
+
+    Duplicate handling: C++ HashTable::set() calls should_grow() BEFORE
+    checking whether the key already exists. A duplicate insertion can
+    trigger a phantom rehash (growing the table) but does NOT increment
+    size — the existing entry is replaced in-place (a no-op for name sets).
+    """
+    _GROW_CAPACITY_AT_LEAST = 8
+    _GROW_AT_LOAD_FACTOR_PERCENT = 70
+
+    capacity = 0
+    # Each bucket stores (name, ideal_bucket_index) or None.
+    # probe_length = current_index - ideal_index (mod capacity).
+    buckets: list[tuple[str, int] | None] = []
+    size = 0
+    # Fast membership test to detect duplicates without scanning all buckets.
+    present: set[str] = set()
+
+    def _should_grow() -> bool:
+        return ((size + 1) * 100) >= (capacity * _GROW_AT_LOAD_FACTOR_PERCENT)
+
+    def _insert_new(name: str) -> None:
+        """Insert a name known NOT to be in the table already."""
+        nonlocal size
+        ideal = _ak_string_hash(name) % capacity
+        cur_idx = ideal
+        cur_probe = 0
+        inserting_name = name
+        inserting_ideal = ideal
+
+        while True:
+            if buckets[cur_idx] is None:
+                buckets[cur_idx] = (inserting_name, inserting_ideal)
+                size += 1
+                return
+            occ_name, occ_ideal = buckets[cur_idx]
+            occ_probe = (cur_idx - occ_ideal) % capacity
+            if cur_probe > occ_probe:
+                # Robin Hood steal: displace the occupying element.
+                buckets[cur_idx] = (inserting_name, inserting_ideal)
+                inserting_name = occ_name
+                inserting_ideal = occ_ideal
+                cur_probe = occ_probe
+            cur_idx = (cur_idx + 1) % capacity
+            cur_probe += 1
+
+    def rehash(new_cap: int) -> None:
+        nonlocal capacity, buckets, size
+        old = [b for b in buckets if b is not None]
+        capacity = new_cap
+        buckets = [None] * capacity
+        size = 0
+        for entry in old:
+            _insert_new(entry[0])
+
+    for name in names:
+        # should_grow() is called BEFORE the duplicate check in C++, so a
+        # duplicate can still trigger a phantom rehash.
+        if _should_grow():
+            rehash(max(capacity * 2, _GROW_CAPACITY_AT_LEAST))
+        if name not in present:
+            _insert_new(name)
+            present.add(name)
+        # else: duplicate — should_grow() already ran above; replace is a no-op.
+
+    return [b[0] for b in buckets if b is not None]
+
+
+# --- Context and Module (new batch-mode architecture, PR #9064) ---
+
+
+@dataclass
+class Module:
+    """One IDL file's contribution to the global context.
+
+    Mirrors IDL::Module in the new C++ batch-mode architecture (PR #9064).
+    `interface` is None for files that only contain typedefs/enums/dicts
+    without a primary interface declaration.
+    """
+
+    module_own_path: str
+    interface: Optional[Interface] = None
+
+
+@dataclass
+class Context:
+    """Global registry of all parsed IDL declarations.
+
+    Built from all IDL files at once (batch mode). Mirrors IDL::Context
+    in the new C++ batch-mode architecture (PR #9064).
+    """
+
+    interfaces: dict[str, Interface] = field(default_factory=dict)
+    dictionaries: dict[str, Dictionary] = field(default_factory=dict)
+    enumerations: dict[str, Enumeration] = field(default_factory=dict)
+    typedefs: dict[str, Typedef] = field(default_factory=dict)
+    callback_functions: dict[str, CallbackFunction] = field(default_factory=dict)
+    mixins: dict[str, Interface] = field(default_factory=dict)
+    partial_dictionaries: dict[str, list[Dictionary]] = field(default_factory=dict)
+    partial_interfaces: list[Interface] = field(default_factory=list)
+    partial_mixins: list[Interface] = field(default_factory=list)
+    partial_namespaces: list[Interface] = field(default_factory=list)
+    included_mixins: dict[str, list[str]] = field(default_factory=dict)
+    modules: list[Module] = field(default_factory=list)
+    # Interface container objects for dictionary-only IDL files (no interface
+    # name, but contain dictionaries/typedefs). Stored separately so typedef
+    # resolution can reach their dictionaries' member types.
+    dictionary_containers: list[Interface] = field(default_factory=list)
+
+
+def cpp_namespace_for_module_path(module_own_path: str) -> str:
+    """Derive the C++ namespace from an IDL file's absolute path.
+
+    Mirrors cpp_namespace_for_module_path from PR #9064:
+    Finds "LibWeb" in the path parts, returns the NEXT part (the sub-namespace).
+    Example: .../Libraries/LibWeb/HTML/Window.idl → "HTML"
+    Falls back to the parent directory name if LibWeb is not found.
+    """
+    parts = Path(module_own_path).parts
+    for i in range(len(parts) - 2):
+        if parts[i] == "LibWeb":
+            return parts[i + 1]
+    if len(parts) >= 2:
+        return parts[-2]
+    return ""
+
+
+def module_will_generate_code(module: Module) -> bool:
+    """Mirror IDL::module_will_generate_code from PR #9064."""
+    return module.interface is not None and _will_generate_code(module.interface)
+
+
+def _will_generate_code(interface: Interface) -> bool:
+    """Mirror IDL::Interface::will_generate_code (Types.h:356-359)."""
+    if interface.name:
+        return True
+    if any(d.is_original_definition for d in interface.dictionaries.values()):
+        return True
+    if any(e.is_original_definition for e in interface.enumerations.values()):
+        return True
+    return False
+
+
+def build_context(interfaces: list[Interface]) -> Context:
+    """Build a Context from a list of parsed (and resolved) interfaces.
+
+    Mirrors IDL::Context construction in PR #9064: each file registers its
+    top-level declarations globally so the semantic include traversal can
+    find them by name.
+
+    Each Interface corresponds to one parsed IDL file. Primary interfaces,
+    mixins, partial interfaces, dictionaries, enumerations, typedefs, and
+    callback functions are all extracted and stored in the Context.
+    """
+    ctx = Context()
+
+    for iface in interfaces:
+        # Create a Module entry for this file.
+        module_own_path = iface.filename
+        primary: Optional[Interface] = None
+
+        if iface.name:
+            if iface.is_partial:
+                # Route partial declarations to the appropriate bucket.
+                if iface.is_mixin:
+                    ctx.partial_mixins.append(iface)
+                elif iface.is_namespace:
+                    ctx.partial_namespaces.append(iface)
+                else:
+                    ctx.partial_interfaces.append(iface)
+            elif iface.is_mixin:
+                ctx.mixins[iface.name] = iface
+            else:
+                ctx.interfaces[iface.name] = iface
+                primary = iface
+
+        # Dictionaries declared in this file.
+        for name, dictionary in iface.dictionaries.items():
+            if dictionary.is_original_definition:
+                ctx.dictionaries[name] = dictionary
+
+        # Partial dictionaries.
+        for name, partials in iface.partial_dictionaries.items():
+            ctx.partial_dictionaries.setdefault(name, []).extend(partials)
+
+        # Enumerations.
+        for name, enumeration in iface.enumerations.items():
+            if enumeration.is_original_definition:
+                ctx.enumerations[name] = enumeration
+
+        # Typedefs.
+        for name, typedef in iface.typedefs.items():
+            ctx.typedefs.setdefault(name, typedef)
+
+        # Callback functions.
+        for name, callback in iface.callback_functions.items():
+            ctx.callback_functions.setdefault(name, callback)
+
+        # Includes statements → included_mixins.
+        # Use a list (not a set) to preserve duplicates: C++ HashTable::set()
+        # calls should_grow() before the duplicate check, so a duplicate
+        # insertion from another file (e.g. WorkerNavigator.idl re-including
+        # GlobalPrivacyControl for Navigator) can trigger a phantom rehash that
+        # changes the bucket layout even though the logical set is unchanged.
+        for target_name, mixin_name in iface.includes_statements:
+            ctx.included_mixins.setdefault(target_name, []).append(mixin_name)
+
+        # Mixins declared in this file (inline mixin declarations inside an IDL
+        # that also has a primary interface).
+        for name, mixin in iface.mixins.items():
+            ctx.mixins.setdefault(name, mixin)
+
+        # Partial mixin/interface/namespace declarations that are nested inside a
+        # file that also has a primary interface (e.g. AnimationEvent.idl defines
+        # `partial interface mixin GlobalEventHandlers { onanimationcancel; ... }`).
+        for partial in iface.partial_mixins:
+            ctx.partial_mixins.append(partial)
+        for partial in iface.partial_interfaces:
+            ctx.partial_interfaces.append(partial)
+        for partial in iface.partial_namespaces:
+            ctx.partial_namespaces.append(partial)
+
+        ctx.modules.append(Module(module_own_path=module_own_path, interface=primary))
+
+        # Track dictionary-only IDL files so typedef resolution can reach their
+        # dictionary member types even though they have no interface name.
+        if not iface.name and iface.dictionaries:
+            ctx.dictionary_containers.append(iface)
+
+    return ctx
+
+
+def resolve_context(ctx: Context) -> None:
+    """Global resolution passes for batch mode (PR #9064).
+
+    Applies all resolution passes across ALL interfaces in the context.
+    Must be called after build_context() and before generation.
+    Mutates ctx.interfaces in place.
+    """
+    # 1. Apply all partial declarations globally.
+    _apply_global_partials(ctx)
+
+    # 2. Resolve includes (mixin flattening) for all interfaces. Must happen
+    #    BEFORE typedef resolution so mixin operations are merged first, then
+    #    all typedefs (including those from merged mixin operations) are resolved.
+    #    Mirrors C++ Context::resolve() order: resolve_partials_and_mixins first,
+    #    then resolve_typedefs (IDLParser.cpp:1457-1464).
+    for iface in ctx.interfaces.values():
+        _resolve_includes_with_context(iface, ctx)
+
+    # 3. Resolve typedef aliases globally (merge ctx.typedefs into each
+    #    interface first, then substitute typedef names with their target types).
+    for iface in ctx.interfaces.values():
+        _resolve_typedefs_with_context(iface, ctx)
+
+    # Also resolve typedefs for dictionary-only IDL files. These have interface
+    # objects with no name (so they're not in ctx.interfaces), but their
+    # dictionaries' member types may reference typedef names that need resolving.
+    for iface in ctx.dictionary_containers:
+        _resolve_typedefs_with_context(iface, ctx)
+
+    # 4. Compute post-parse names for all interfaces.
+    for iface in ctx.interfaces.values():
+        compute_post_parse_names(iface)
+
+    # 5. Number overload sets for all interfaces.
+    for iface in ctx.interfaces.values():
+        number_overload_sets(iface)
+
+
+def _apply_global_partials(ctx: Context) -> None:
+    """Apply all partial declarations to their primaries (batch-mode pass)."""
+    for partial in ctx.partial_interfaces:
+        # Skip [Exposed=Nobody] partial interfaces — they are test/internal
+        # stubs not exposed to any JS global scope. C++ generator omits them.
+        if partial.extended_attributes.get("Exposed") == "Nobody":
+            continue
+        primary = ctx.interfaces.get(partial.name)
+        if primary is not None:
+            _extend_with_partial_interface(primary, partial)
+
+    for partial in ctx.partial_namespaces:
+        primary = ctx.interfaces.get(partial.name)
+        if primary is not None and primary.is_namespace:
+            _extend_with_partial_interface(primary, partial)
+
+    for partial in ctx.partial_mixins:
+        mixin = ctx.mixins.get(partial.name)
+        if mixin is not None:
+            _extend_with_partial_interface(mixin, partial)
+
+    for dict_name, partials in ctx.partial_dictionaries.items():
+        primary = ctx.dictionaries.get(dict_name)
+        if primary is not None:
+            for partial in partials:
+                primary.members.extend(partial.members)
+
+
+def _resolve_typedefs_with_context(interface: Interface, ctx: Context) -> None:
+    """Resolve typedefs using both local and global typedef map."""
+    # Build merged typedef map: global typedefs as base, local override.
+    merged = dict(ctx.typedefs)
+    merged.update(interface.typedefs)
+    interface.typedefs = merged
+    resolve_typedefs(interface)
+
+
+def _resolve_includes_with_context(interface: Interface, ctx: Context) -> None:
+    """Apply 'A includes B' mixin statements using the global mixin registry."""
+    if not interface.has_primary_interface:
+        return
+
+    # Use the global insertion sequence from ctx.included_mixins, which
+    # preserves duplicates from across all IDL files in file-sorted order.
+    # This is the full sequence the C++ HashTable received, including phantom
+    # duplicate insertions that can trigger rehashes.
+    insertion_sequence = ctx.included_mixins.get(interface.name, [])
+
+    # C++ uses an unordered AK::HashTable to store mixin names, so the
+    # iteration order (and thus the attribute insertion order) follows the
+    # hash table's bucket order, NOT the IDL declaration order. Replicate
+    # this so generated code matches C++ byte-for-byte.
+    ordered_mixin_names = _ak_hashtable_order(insertion_sequence)
+
+    for mixin_name in ordered_mixin_names:
+        mixin = ctx.mixins.get(mixin_name) or interface.mixins.get(mixin_name)
+        if mixin is None:
+            continue
+
+        interface.attributes.extend(mixin.attributes)
+        interface.constants.extend(mixin.constants)
+        interface.operations.extend(mixin.operations)
+        interface.static_operations.extend(mixin.static_operations)
+        if mixin.has_unscopable_member:
+            interface.has_unscopable_member = True
+        if mixin.has_stringifier and not interface.has_stringifier:
+            interface.has_stringifier = True
+            interface.stringifier_attribute = mixin.stringifier_attribute
+            interface.stringifier_extended_attributes = mixin.stringifier_extended_attributes
+
 
 # --- pass 1: #import resolution ---
 
@@ -630,16 +1007,12 @@ def compute_post_parse_names(interface: Interface) -> None:
     else:
         interface.namespaced_name = interface.name
 
-    # main.cpp computes fully_qualified_name from the IDL file's parent
-    # directory (e.g. Libraries/LibWeb/HTML/Foo.idl → "HTML"). If that
-    # directory is in the libweb_interface_namespaces list, the name is
-    # qualified.
+    # main.cpp computes fully_qualified_name by finding "LibWeb" in the path
+    # and using the next component as the namespace (PR #9064 new logic).
     if interface.filename:
-        parts = Path(interface.filename).parts
-        # Take the directory just above the file (e.g. ".../HTML/Foo.idl" → "HTML").
-        directory = parts[-2] if len(parts) >= 2 else ""
-        if directory in _libweb_interface_namespaces():
-            interface.fully_qualified_name = f"{directory}::{interface.implemented_name}"
+        ns = cpp_namespace_for_module_path(interface.filename)
+        if ns:
+            interface.fully_qualified_name = f"{ns}::{interface.implemented_name}"
         else:
             interface.fully_qualified_name = interface.implemented_name
     else:
